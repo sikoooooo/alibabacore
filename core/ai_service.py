@@ -17,13 +17,14 @@ class AIService:
 
     @classmethod
     def smart_process_command(cls, user_text: str, branch: str, chat_history: list = None):
-        """معالجة النص مع دعم الذاكرة القصيرة للتاجر"""
-        if chat_history is None: chat_history = []
+        """معالجة النص مع دعم الذاكرة القصيرة للتاجر واستعلامات المخزون الذكية"""
+        if chat_history is None: 
+            chat_history = []
         
         try:
             rules_res = supabase.table("business_rules").select("*").eq("branch", branch).execute()
             known_rules = rules_res.data if rules_res.data else []
-        except:
+        except Exception:
             known_rules = []
             
         # تجهيز سياق المحادثة السابقة (الذاكرة القصيرة)
@@ -31,20 +32,54 @@ class AIService:
         
         model = cls.get_model()
         prompt = f"""
-        أنت محاسب ذكي لنظام ERP.
+        أنت مساعد محاسبي ذكي لنظام ERP. مهمتك تحليل كلام التاجر واستخراج بيانات المعاملة أو الاستعلام بدقة.
+        قواعد ومعلومات الفرع المعروفة: {known_rules}
         سياق آخر رسائل بينك وبين التاجر (استخدمه لفهم المقصد إذا كان الكلام مختصراً مثل "حط 5 كمان"):
         {history_context}
-        
-        الجملة الجديدة للتاجر الآن: "{user_text}"
-        قواعد التحويل المحفوظة للفرع: {json.dumps(known_rules, ensure_ascii=False)}
-        
-        بناءً على السياق والجملة الجديدة، استخرج العملية.
-        يجب أن يكون ردك بصيغة JSON نقي فقط:
-        {{"type": "SALE أو PURCHASE أو QUERY", "item_name": "اسم الصنف", "quantity": رقم, "unit": "وحدة القياس", "unit_price": رقم, "message_to_user": "رد تأكيدي"}}
+
+        الرسالة الحالية من المستخدم: "{user_text}"
+
+        صنف الرسالة بدقة إلى أحد الأنواع التالية:
+        - "PURCHASE" (شراء بضاعة أو إدخال وارد للمخزن)
+        - "SALE" (بيع بضاعة أو إخراج من المخزن)
+        - "QUERY" (استعلام عن رصيد صنف، بضاعة، حالة المخزن، أو تقارير)
+        - "INCOMPLETE" (بيانات ناقصة تماماً)
+
+        أخرج النتيجة ككود JSON حصرياً بدون أي نصوص أو شروحات خارجه:
+        {{
+            "type": "PURCHASE" أو "SALE" أو "QUERY" أو "INCOMPLETE",
+            "item_name": "اسم الصنف إن وجد أو عام",
+            "quantity": 1.0 (رقم فقط),
+            "unit": "وحدة القياس أو غير محدد",
+            "unit_price": 0.0 (رقم السعر إن وجد وإلا 0),
+            "message_to_user": "رد احترافي باللغة العربية يوضح ما تم أو يجيب على الاستعلام مبدئياً"
+        }}
         """
-        response = model.generate_content(prompt)
+        
         try:
+            response = model.generate_content(prompt)
             clean_text = response.text.replace("```json", "").replace("```", "").strip()
-            return json.loads(clean_text)
-        except Exception:
-            return {"type": "QUERY", "item_name": user_text, "quantity": 1, "unit": "قطعة", "unit_price": 0, "message_to_user": "تم الاستلام"}
+            
+            start_idx = clean_text.find('{')
+            end_idx = clean_text.rfind('}')
+            if start_idx != -1 and end_idx != -1:
+                json_str = clean_text[start_idx:end_idx+1]
+                return json.loads(json_str)
+            else:
+                return {
+                    "type": "INCOMPLETE",
+                    "item_name": "غير محدد",
+                    "quantity": 1.0,
+                    "unit": "وحدة",
+                    "unit_price": 0.0,
+                    "message_to_user": "عذراً، لم أفهم تفاصيل طلبك بدقة. هل يمكنك التوضيح؟"
+                }
+        except Exception as e:
+            return {
+                "type": "INCOMPLETE",
+                "item_name": "غير محدد",
+                "quantity": 1.0,
+                "unit": "وحدة",
+                "unit_price": 0.0,
+                "message_to_user": f"حدث خطأ أثناء معالجة الذكاء الاصطناعي: {str(e)}"
+            }
