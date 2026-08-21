@@ -1,42 +1,30 @@
 import json
-import google.generativeai as genai
+# التحديث الجديد: استخدام المكتبة الحديثة فقط لدعم المفاتيح الجديدة
+from google import genai
 from core.database import supabase
 
-try:
-    import streamlit as st
-    # جمع كل مفاتيح الـ API المتاحة في الإعدادات السرية تلقائياً
-    api_keys = []
-    for key_name in ["GOOGLE_API_KEY", "GOOGLE_API_KEY_1", "GOOGLE_API_KEY_2", "GOOGLE_API_KEY_3", "GEMINI_API_KEY"]:
-        val = st.secrets.get(key_name, "")
-        if val and val not in api_keys:
-            api_keys.append(val)
-            
-    # دعم صيغة السسلسلة المفصولة بفاصلة إن وجدت
-    if "GOOGLE_API_KEYS" in st.secrets:
-        extra_keys = st.secrets["GOOGLE_API_KEYS"].split(",")
-        for k in extra_keys:
-            k_clean = k.strip()
-            if k_clean and k_clean not in api_keys:
-                api_keys.append(k_clean)
-except Exception:
-    api_keys = []
-
-if not api_keys:
-    api_keys = [""] # مفتاح فارغ افتراضي
+api_keys = [
+    "AQ.Ab8RN6KsmZlOVBitqBHl9MTKvhDTCrOkLckSZOLq5opLxEM97g",
+    "AQ.Ab8RN6IOOQs421k9-f9CtpYl-b7mKWe1ID2e-VODE8WbGDLy0g",
+    "AQ.Ab8RN6LDnxPObId4PxP_7RWvXtPSekj6ftHZ6AIwiVKyVQso5Q",
+    "AQ.Ab8RN6IXSRGUETheaRkxa2JuolYCfGIL-888kwz8J9-OfWZ4Gw",
+    "AQ.Ab8RN6K7vSSUfuhGYpcuwDBFOwwFa_F5lj-nsNeWulqimXRBFA",
+    "AQ.Ab8RN6KBRA7A1-2FeQ5dffRxP6OCTiAqzC5PPfJ59NAT7zNvIA",
+    "AQ.Ab8RN6JVygUc808mR9xfWPrWau0zgvPT-Ak-1CCAARyDdMQRMA"
+]
 
 class AIService:
     current_key_index = 0
 
     @classmethod
-    def get_model(cls):
+    def get_client(cls):
         if api_keys:
             key = api_keys[cls.current_key_index % len(api_keys)]
-            genai.configure(api_key=key)
-        return genai.GenerativeModel('gemini-3.6-flash')
+            return genai.Client(api_key=key)
+        return genai.Client()
 
     @classmethod
     def smart_process_command(cls, user_text: str, branch: str, chat_history: list = None):
-        """معالجة النص مع نظام التبديل التلقائي لمفاتيح API عند نفاد الكوته"""
         if chat_history is None: 
             chat_history = []
         
@@ -76,8 +64,11 @@ class AIService:
         max_retries = max(len(api_keys), 1)
         for attempt in range(max_retries):
             try:
-                model = cls.get_model()
-                response = model.generate_content(prompt)
+                client = cls.get_client()
+                response = client.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=prompt
+                )
                 clean_text = response.text.replace("```json", "").replace("```", "").strip()
                 
                 start_idx = clean_text.find('{')
@@ -96,8 +87,7 @@ class AIService:
                     }
             except Exception as e:
                 err_str = str(e)
-                # إذا حدث خطأ حصة (429 أو quota أو limit)، انتقل للمفتاح التالي فوراً وجرب
-                if "429" in err_str or "quota" in err_str.lower() or "limit" in err_str.lower():
+                if any(err in err_str.lower() for err in ["429", "quota", "limit", "401", "unauthorized", "token"]):
                     cls.current_key_index = (cls.current_key_index + 1) % len(api_keys)
                     continue
                 else:
