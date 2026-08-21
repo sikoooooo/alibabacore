@@ -7,7 +7,7 @@ class InventoryService:
             trans_type = parsed_data.get("type", "SALE")
             item_name = parsed_data.get("item_name", "غير محدد")
             
-            # معالجة آمنة جداً للأرقام
+            # معالجة آمنة للأرقام
             try:
                 input_qty = float(parsed_data.get("quantity", 1))
             except Exception:
@@ -25,20 +25,28 @@ class InventoryService:
             if not company_id or not branch_id:
                 return False, "فشل في الاتصال بهيكل الشركة والفروع في قاعدة البيانات."
 
-            # 1. تسجيل الحركة
+            # 1. تسجيل الحركة الأساسية في جدول transactions
             supabase.table("transactions").insert({
                 "company_id": company_id, "branch_id": branch_id, "branch": branch,
                 "type": trans_type, "item_name": item_name, "input_quantity": input_qty,
                 "unit_price": unit_price, "total_amount": total_amount, "raw_text": raw_text
             }).execute()
 
-            # 2. القيد
+            # 2. تسجيل القيد المحاسبي المزدوج (مدين ودائن)
+            # بناءً على نوع الحركة، نحدد الوصف المحاسبي الدقيق
+            if trans_type == "PURCHASE":
+                description = f"قيد شراء صنف ({item_name}) - مدين: المخزون / دائن: النقدية-الموردين"
+            else:
+                description = f"قيد بيع صنف ({item_name}) - مدين: النقدية-العملاء / دائن: المبيعات"
+
             supabase.table("journal_entries").insert({
-                "company_id": company_id, "branch_id": branch_id,
-                "description": f"حركة {trans_type} للصنف: {item_name}", "total_amount": total_amount
+                "company_id": company_id, 
+                "branch_id": branch_id,
+                "description": description, 
+                "total_amount": total_amount
             }).execute()
 
-            # 3. المخزن
+            # 3. تحديث المخزن (إضافة أو خصم)
             existing = supabase.table("inventory").select("*").eq("branch", branch).eq("item_name", item_name).execute()
             if existing.data:
                 current_total = float(existing.data[0].get("total_base_quantity", 0))
@@ -50,7 +58,7 @@ class InventoryService:
                     "branch": branch, "item_name": item_name, "total_base_quantity": initial_total, "avg_cost_per_base": unit_price
                 }).execute()
                 
-            return True, "تم التسجيل بنجاح"
+            return True, "تم تسجيل الحركة والقيود المحاسبية بنجاح"
             
         except Exception as e:
             return False, str(e)
