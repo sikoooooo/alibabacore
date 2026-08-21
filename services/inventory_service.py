@@ -1,4 +1,7 @@
 from core.database import supabase, db_manager
+from core.local_sync import LocalSyncManager
+
+sync_manager = LocalSyncManager()
 
 class InventoryService:
     @staticmethod
@@ -20,64 +23,50 @@ class InventoryService:
 
             total_amount = input_qty * unit_price
 
-            # جلب معرفات الشركة والفرع
-            company_id, branch_id = db_manager.ensure_default_enterprise_setup(branch)
-            if not company_id or not branch_id:
-                return False, "فشل في الاتصال بهيكل الشركة والفروع في قاعدة البيانات."
-
-            # جلب اسم الشركة النصي صراحة للمحاسب القانوني
-            company_name = "الشركة الافتراضية العامة"
+            # محاولة الاتصال بالسحابة وتسجيل البيانات
             try:
+                company_id, branch_id = db_manager.ensure_default_enterprise_setup(branch)
+                if not company_id or not branch_id:
+                    raise Exception("فشل في جلب هيكل الشركة والفرع")
+
+                company_name = "الشركة الافتراضية العامة"
                 comp_res = supabase.table("companies").select("name").eq("id", company_id).execute()
                 if comp_res.data:
                     company_name = comp_res.data[0].get("name", "الشركة الافتراضية العامة")
-            except Exception:
-                pass
 
-            # 1. تسجيل الحركة الأساسية في جدول transactions
-            supabase.table("transactions").insert({
-                "company_id": company_id, 
-                "branch_id": branch_id, 
-                "branch": branch,
-                "type": trans_type, 
-                "item_name": item_name, 
-                "input_quantity": input_qty,
-                "unit_price": unit_price, 
-                "total_amount": total_amount, 
-                "raw_text": raw_text
-            }).execute()
-
-            # 2. تسجيل القيد المحاسبي المزدوج مع الأسماء النصية الصريحة للمحاسب القانوني
-            if trans_type == "PURCHASE":
-                description = f"قيد شراء صنف ({item_name}) - مدين: المخزون / دائن: النقدية أو الموردين"
-            else:
-                description = f"قيد بيع صنف ({item_name}) - مدين: النقدية أو العملاء / دائن: المبيعات"
-
-            supabase.table("journal_entries").insert({
-                "company_id": company_id, 
-                "branch_id": branch_id,
-                "company_name": company_name,
-                "branch_name": branch,
-                "description": description, 
-                "total_amount": total_amount
-            }).execute()
-
-            # 3. تحديث المخزن (إضافة أو خصم)
-            existing = supabase.table("inventory").select("*").eq("branch", branch).eq("item_name", item_name).execute()
-            if existing.data:
-                current_total = float(existing.data[0].get("total_base_quantity", 0))
-                new_total = current_total - input_qty if trans_type == "SALE" else current_total + input_qty
-                supabase.table("inventory").update({"total_base_quantity": new_total}).eq("branch", branch).eq("item_name", item_name).execute()
-            else:
-                initial_total = input_qty if trans_type == "PURCHASE" else -input_qty
-                supabase.table("inventory").insert({
-                    "branch": branch, 
-                    "item_name": item_name, 
-                    "total_base_quantity": initial_total, 
-                    "avg_cost_per_base": unit_price
+                # 1. تسجيل الحركة
+                supabase.table("transactions").insert({
+                    "company_id": company_id, "branch_id": branch_id, "branch": branch,
+                    "type": trans_type, "item_name": item_name, "input_quantity": input_qty,
+                    "unit_price": unit_price, "total_amount": total_amount, "raw_text": raw_text
                 }).execute()
+
+                # 2. تسجيل القيد المحاسبي المزدوج بالأسماء الصريحة
+                description = f"قيد {trans_type} للصنف ({item_name}) بفرع {branch}"
+                supabase.table("journal_entries").insert({
+                    "company_id": company_id, "branch_id": branch_id,
+                    "company_name": company_name, "branch_name": branch,
+                    "description": description, "total_amount": total_amount
+                }).execute()
+
+                # 3. تحديث المخزن
+                existing = supabase.table("inventory").select("*").eq("branch", branch).eq("item_name", item_name).execute()
+                if existing.data:
+                    current_total = float(existing.data[0].get("total_base_quantity", 0))
+                    new_total = current_total - input_qty if trans_type == "SALE" else current_total + input_qty
+                    supabase.table("inventory").update({"total_base_quantity": new_total}).eq("branch", branch).eq("item_name", item_name).execute()
+                else:
+                    initial_total = input_qty if trans_type == "PURCHASE" else -input_qty
+                    supabase.table("inventory").insert({
+                        "branch": branch, "item_name": item_name, "total_base_quantity": initial_total, "avg_cost_per_base": unit_price
+                    }).execute()
+                    
+                return True, "تم التسجيل بنجاح في السحاب"
+
+            except Exception as cloud_err:
+                # 🌐 في حال انقطاع الإنترنت أو فشل السحابة، يتم الحفظ محلياً فوراً
+                sync_manager.save_offline(branch, raw_text, parsed_data)
+                return True, f"⚠️ انقطع الاتصال بالإنترنت! تم حفظ الحركة محلياً في طابور الانتظار (عدد المعلق: {sync_manager.get_pending_count()})"
                 
-            return True, "تم تسجيل الحركة والقيود المحاسبية بأسماء واضحة للمحاسب بنجاح"
-            
         except Exception as e:
             return False, str(e)
