@@ -10,7 +10,6 @@ class InventoryService:
             trans_type = parsed_data.get("type", "SALE")
             item_name = parsed_data.get("item_name", "غير محدد")
             
-            # معالجة آمنة للأرقام
             try:
                 input_qty = float(parsed_data.get("quantity", 1))
             except Exception:
@@ -23,7 +22,6 @@ class InventoryService:
 
             total_amount = input_qty * unit_price
 
-            # محاولة الاتصال بالسحابة وتسجيل البيانات
             try:
                 company_id, branch_id = db_manager.ensure_default_enterprise_setup(branch)
                 if not company_id or not branch_id:
@@ -64,9 +62,8 @@ class InventoryService:
                 return True, "تم التسجيل بنجاح في السحاب"
 
             except Exception as cloud_err:
-                # 🌐 في حال انقطاع الإنترنت أو فشل السحابة، يتم الحفظ محلياً فوراً
                 sync_manager.save_offline(branch, raw_text, parsed_data)
-                return True, f"⚠️ انقطع الاتصال بالإنترنت! تم حفظ الحركة محلياً في طابور الانتظار (عدد المعلق: {sync_manager.get_pending_count()})"
+                return True, f"⚠️ انقطع الاتصال بالإنترنت! تم حفظ الحركة محلياً (عدد المعلق: {sync_manager.get_pending_count()})"
                 
         except Exception as e:
             return False, str(e)
