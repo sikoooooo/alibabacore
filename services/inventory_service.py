@@ -10,6 +10,7 @@ class InventoryService:
             trans_type = parsed_data.get("type", "SALE")
             item_name = parsed_data.get("item_name", "غير محدد")
             
+            # معالجة آمنة للأرقام (تقبل السعر 0 إذا لم يُذكر لتسجيل الكمية أولاً)
             try:
                 input_qty = float(parsed_data.get("quantity", 1))
             except Exception:
@@ -22,6 +23,7 @@ class InventoryService:
 
             total_amount = input_qty * unit_price
 
+            # الاتصال بالسحابة
             try:
                 company_id, branch_id = db_manager.ensure_default_enterprise_setup(branch)
                 if not company_id or not branch_id:
@@ -32,14 +34,14 @@ class InventoryService:
                 if comp_res.data:
                     company_name = comp_res.data[0].get("name", "الشركة الافتراضية العامة")
 
-                # 1. تسجيل الحركة
+                # 1. تسجيل الحركة (حتى لو كانت ببيانات ناقصة أو بدون سعر)
                 supabase.table("transactions").insert({
                     "company_id": company_id, "branch_id": branch_id, "branch": branch,
                     "type": trans_type, "item_name": item_name, "input_quantity": input_qty,
                     "unit_price": unit_price, "total_amount": total_amount, "raw_text": raw_text
                 }).execute()
 
-                # 2. تسجيل القيد المحاسبي المزدوج بالأسماء الصريحة
+                # 2. تسجيل القيد المحاسبي المزدوج
                 description = f"قيد {trans_type} للصنف ({item_name}) بفرع {branch}"
                 supabase.table("journal_entries").insert({
                     "company_id": company_id, "branch_id": branch_id,
@@ -47,7 +49,7 @@ class InventoryService:
                     "description": description, "total_amount": total_amount
                 }).execute()
 
-                # 3. تحديث المخزن
+                # 3. تحديث المخزن فوراً (لدخول البضاعة ذهنياً وفعلياً)
                 existing = supabase.table("inventory").select("*").eq("branch", branch).eq("item_name", item_name).execute()
                 if existing.data:
                     current_total = float(existing.data[0].get("total_base_quantity", 0))
@@ -59,11 +61,14 @@ class InventoryService:
                         "branch": branch, "item_name": item_name, "total_base_quantity": initial_total, "avg_cost_per_base": unit_price
                     }).execute()
                     
-                return True, "تم التسجيل بنجاح في السحاب"
+                if unit_price == 0:
+                    return True, "✅ تم إثبات كمية البضاعة في المخزون بنجاح. يرجى تزويدي بالسعر لاحقاً لتحديث الإجمالي."
+                else:
+                    return True, "✅ تم تسجيل الحركة والقيود المحاسبية بالكامل بنجاح."
 
             except Exception as cloud_err:
                 sync_manager.save_offline(branch, raw_text, parsed_data)
-                return True, f"⚠️ انقطع الاتصال بالإنترنت! تم حفظ الحركة محلياً (عدد المعلق: {sync_manager.get_pending_count()})"
+                return True, f"⚠️ انقطع الاتصال! تم حفظ الحركة محلياً في طابور الانتظار (عدد المعلق: {sync_manager.get_pending_count()})"
                 
         except Exception as e:
             return False, str(e)
