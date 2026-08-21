@@ -1,11 +1,12 @@
 import streamlit as st
+from datetime import datetime
 from core.ai_service import AIService
 from services.inventory_service import InventoryService
 from core.database import supabase
 
 st.set_page_config(page_title="المحاسب الذكي - نواة علي بابا", page_icon="🤖", layout="centered")
 
-st.title("🤖 المحاسب الذكي - نواة علي بابا (v2.1)")
+st.title("🤖 المحاسب الذكي - نواة علي بابا (v2.3)")
 
 # اختيار الفرع النشط
 branch = st.selectbox("📍 اختر الفرع:", ["الفرع الرئيسي (القاهرة)", "فرع الإسكندرية"])
@@ -24,7 +25,7 @@ with main_tab:
             st.markdown(message["content"])
 
     # إدخال رسالة التاجر
-    if user_input := st.chat_input("اكتب معاملتك أو استعلامك هنا (مثلاً: اشترينا 10 طن بلح / عندنا قد ايه مكرونة؟)..."):
+    if user_input := st.chat_input("اكتب معاملتك أو استعلامك هنا (مثلاً: بيعنا بكام النهارده؟ / عندنا قد ايه مكرونة؟ / متوسط سعر البلح كام؟)..."):
         st.session_state.messages.append({"role": "user", "content": user_input})
         with st.chat_message("user"):
             st.markdown(user_input)
@@ -41,23 +42,65 @@ with main_tab:
                     response_text = f"{ai_message}\n\n*{msg}*"
                 
                 elif trans_type == "QUERY":
-                    # 🔍 استعلام ذكي ودقيق عن صنف معين أو إجمالي المخزن باختصار
+                    # 🔍 محرك الاستعلامات الذكي الشامل بلغة السوق
                     try:
-                        inv_query = supabase.table("inventory").select("*").eq("branch", branch)
-                        if item_name and item_name != "غير محدد":
-                            inv_query = inv_query.ilike("item_name", f"%{item_name}%")
+                        text_lower = user_input.lower()
+                        today_str = datetime.now().strftime("%Y-%m-%d")
                         
-                        inv_res = inv_query.execute()
-                        
-                        if inv_res.data:
-                            if item_name and item_name != "غير محدد":
-                                matched_item = inv_res.data[0]
-                                response_text = f"📦 رصيد **{matched_item['item_name']}** في {branch} هو: **{matched_item['total_base_quantity']} وحدة** (متوسط التكلفة: {matched_item.get('avg_cost_per_base', 0)})"
+                        if "بيع" in text_lower or "مبيعات" in text_lower:
+                            # استعلام إجمالي المبيعات
+                            trans_res = supabase.table("transactions").select("total_amount").eq("branch", branch).eq("type", "SALE").execute()
+                            if trans_res.data:
+                                total_sales = sum(float(t.get("total_amount", 0)) for t in trans_res.data)
+                                response_text = f"💰 إجمالي المبيعات المسجلة في {branch} هو: **{total_sales:,.2f} ج.م**"
                             else:
-                                items_summary = "\n".join([f"- **{i['item_name']}**: {i['total_base_quantity']} وحدة" for i in inv_res.data])
-                                response_text = f"📊 **ملخص مخزن {branch}:**\n\n{items_summary}"
+                                response_text = f"📂 لا توجد مبيعات مسجلة في {branch} حتى الآن."
+                                
+                        elif "شراء" in text_lower or "مشتريات" in text_lower:
+                            # استعلام إجمالي المشتريات
+                            trans_res = supabase.table("transactions").select("total_amount").eq("branch", branch).eq("type", "PURCHASE").execute()
+                            if trans_res.data:
+                                total_purchases = sum(float(t.get("total_amount", 0)) for t in trans_res.data)
+                                response_text = f"🛒 إجمالي المشتريات المسجلة في {branch} هو: **{total_purchases:,.2f} ج.م**"
+                            else:
+                                response_text = f"📂 لا توجد مشتريات مسجلة في {branch} حتى الآن."
+                                
+                        elif "متوسط" in text_lower or "سعر" in text_lower:
+                            # استعلام متوسط سعر صنف معين
+                            inv_query = supabase.table("inventory").select("*").eq("branch", branch)
+                            if item_name and item_name != "غير محدد" and item_name != "عام":
+                                inv_query = inv_query.ilike("item_name", f"%{item_name}%")
+                            inv_res = inv_query.execute()
+                            
+                            if inv_res.data:
+                                if item_name and item_name != "غير محدد" and item_name != "عام":
+                                    item = inv_res.data[0]
+                                    avg_price = float(item.get("avg_cost_per_base", 0))
+                                    response_text = f"🏷️ متوسط سعر صنف **{item['item_name']}** في {branch} هو: **{avg_price:,.2f} ج.م**"
+                                else:
+                                    prices_summary = "\n".join([f"- **{i['item_name']}**: متوسط التكلفة {i.get('avg_cost_per_base', 0):,.2f} ج.م" for i in inv_res.data])
+                                    response_text = f"🏷️ **متوسط أسعار الأصناف في {branch}:**\n\n{prices_summary}"
+                            else:
+                                response_text = f"📂 لا توجد بيانات أسعار مسجلة للصنف '{item_name}'."
                         else:
-                            response_text = f"📂 عذراً، لا توجد بيانات مسجلة للصنف '{item_name}' في {branch}."
+                            # استعلام أرصدة المخزن للأصناف بالوحدة الفعلية
+                            inv_query = supabase.table("inventory").select("*").eq("branch", branch)
+                            if item_name and item_name != "غير محدد" and item_name != "عام":
+                                inv_query = inv_query.ilike("item_name", f"%{item_name}%")
+                            
+                            inv_res = inv_query.execute()
+                            if inv_res.data:
+                                if item_name and item_name != "غير محدد" and item_name != "عام":
+                                    matched_item = inv_res.data[0]
+                                    qty = matched_item['total_base_quantity']
+                                    # عرض الوحدة بذكاء بناءً على الكمية أو الصنف (بدون كلمة وحدة جامدة)
+                                    unit_label = "طن" if "طن" in user_input or qty >= 10 else "وحدة"
+                                    response_text = f"📦 رصيد **{matched_item['item_name']}** في {branch} هو: **{qty} {unit_label}** (متوسط التكلفة: {matched_item.get('avg_cost_per_base', 0):,.2f} ج.م)"
+                                else:
+                                    items_summary = "\n".join([f"- **{i['item_name']}**: {i['total_base_quantity']} وحدة" for i in inv_res.data])
+                                    response_text = f"📊 **ملخص مخزن {branch}:**\n\n{items_summary}"
+                            else:
+                                response_text = f"📂 عذراً، لا توجد بيانات مسجلة للصنف '{item_name}' في {branch}."
                     except Exception as e:
                         response_text = f"عذراً، حدث خطأ أثناء الاستعلام: {e}"
                 
