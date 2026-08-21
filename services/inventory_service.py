@@ -25,23 +25,39 @@ class InventoryService:
             if not company_id or not branch_id:
                 return False, "فشل في الاتصال بهيكل الشركة والفروع في قاعدة البيانات."
 
+            # جلب اسم الشركة النصي صراحة للمحاسب القانوني
+            company_name = "الشركة الافتراضية العامة"
+            try:
+                comp_res = supabase.table("companies").select("name").eq("id", company_id).execute()
+                if comp_res.data:
+                    company_name = comp_res.data[0].get("name", "الشركة الافتراضية العامة")
+            except Exception:
+                pass
+
             # 1. تسجيل الحركة الأساسية في جدول transactions
             supabase.table("transactions").insert({
-                "company_id": company_id, "branch_id": branch_id, "branch": branch,
-                "type": trans_type, "item_name": item_name, "input_quantity": input_qty,
-                "unit_price": unit_price, "total_amount": total_amount, "raw_text": raw_text
+                "company_id": company_id, 
+                "branch_id": branch_id, 
+                "branch": branch,
+                "type": trans_type, 
+                "item_name": item_name, 
+                "input_quantity": input_qty,
+                "unit_price": unit_price, 
+                "total_amount": total_amount, 
+                "raw_text": raw_text
             }).execute()
 
-            # 2. تسجيل القيد المحاسبي المزدوج (مدين ودائن)
-            # بناءً على نوع الحركة، نحدد الوصف المحاسبي الدقيق
+            # 2. تسجيل القيد المحاسبي المزدوج مع الأسماء النصية الصريحة للمحاسب القانوني
             if trans_type == "PURCHASE":
-                description = f"قيد شراء صنف ({item_name}) - مدين: المخزون / دائن: النقدية-الموردين"
+                description = f"قيد شراء صنف ({item_name}) - مدين: المخزون / دائن: النقدية أو الموردين"
             else:
-                description = f"قيد بيع صنف ({item_name}) - مدين: النقدية-العملاء / دائن: المبيعات"
+                description = f"قيد بيع صنف ({item_name}) - مدين: النقدية أو العملاء / دائن: المبيعات"
 
             supabase.table("journal_entries").insert({
                 "company_id": company_id, 
                 "branch_id": branch_id,
+                "company_name": company_name,
+                "branch_name": branch,
                 "description": description, 
                 "total_amount": total_amount
             }).execute()
@@ -55,10 +71,13 @@ class InventoryService:
             else:
                 initial_total = input_qty if trans_type == "PURCHASE" else -input_qty
                 supabase.table("inventory").insert({
-                    "branch": branch, "item_name": item_name, "total_base_quantity": initial_total, "avg_cost_per_base": unit_price
+                    "branch": branch, 
+                    "item_name": item_name, 
+                    "total_base_quantity": initial_total, 
+                    "avg_cost_per_base": unit_price
                 }).execute()
                 
-            return True, "تم تسجيل الحركة والقيود المحاسبية بنجاح"
+            return True, "تم تسجيل الحركة والقيود المحاسبية بأسماء واضحة للمحاسب بنجاح"
             
         except Exception as e:
             return False, str(e)
