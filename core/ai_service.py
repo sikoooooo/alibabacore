@@ -10,6 +10,7 @@ from core.database import supabase
 
 # 🔑 قائمة مفاتيح الـ API مباشرة داخل الكود (بدون سيكريت)
 api_keys = [
+    "AQ.Ab8RN6I6hnoEy5aNRBFLo00dNpr_tE6tkZLRpkWb0nfgpVzr2w"
     "AQ.Ab8RN6KsmZlOVBitqBHl9MTKvhDTCrOkLckSZOLq5opLxEM97g",
     "AQ.Ab8RN6IOOQs421k9-f9CtpYl-b7mKWe1ID2e-VODE8WbGDLy0g",
     "AQ.Ab8RN6LDnxPObId4PxP_7RWvXtPSekj6ftHZ6AIwiVKyVQso5Q",
