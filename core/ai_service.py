@@ -8,39 +8,28 @@ except ImportError:
 from google import genai
 from core.database import supabase
 
-# سحب المفاتيح من السيكريت تلقائياً
-api_keys = []
-if st and hasattr(st, "secrets"):
-    for key_name in ["GOOGLE_API_KEY", "GOOGLE_API_KEY_1", "GOOGLE_API_KEY_2", "GOOGLE_API_KEY_3", "GOOGLE_API_KEY_4", "GEMINI_API_KEY"]:
-        val = st.secrets.get(key_name, "")
-        if val and val not in api_keys:
-            api_keys.append(val)
-            
-    if "GOOGLE_API_KEYS" in st.secrets:
-        extra_keys = st.secrets["GOOGLE_API_KEYS"].split(",")
-        for k in extra_keys:
-            k_clean = k.strip()
-            if k_clean and k_clean not in api_keys:
-                api_keys.append(k_clean)
-
-if not api_keys:
-    api_keys = [""]
+# 🔑 قائمة مفاتيح الـ API مباشرة داخل الكود (بدون سيكريت)
+api_keys = [
+    "AQ.Ab8RN6KsmZlOVBitqBHl9MTKvhDTCrOkLckSZOLq5opLxEM97g",
+    "AQ.Ab8RN6IOOQs421k9-f9CtpYl-b7mKWe1ID2e-VODE8WbGDLy0g",
+    "AQ.Ab8RN6LDnxPObId4PxP_7RWvXtPSekj6ftHZ6AIwiVKyVQso5Q",
+    "AQ.Ab8RN6IXSRGUETheaRkxa2JuolYCfGIL-888kwz8J9-OfWZ4Gw",
+    "AQ.Ab8RN6K7vSSUfuhGYpcuwDBFOwwFa_F5lj-nsNeWulqimXRBFA",
+    "AQ.Ab8RN6LTwEmXPjHD7K7HX_U8leyMSkkLOIwo7VNff3FLn3PKQA"
+]
 
 class AIService:
     current_key_index = 0
 
     @classmethod
     def get_client(cls):
+        # اختيار المفتاح الحالي بناءً على المؤشر بالدور (Round-Robin)
         key = api_keys[cls.current_key_index % len(api_keys)] if api_keys else ""
         
-        # تنظيف بيئة السيرفر مؤقتاً لمنع تعارض مكتبة جوجل وإجبارها على استخدام المفتاح الممرر
-        for env_key in ["GOOGLE_API_KEY", "GEMINI_API_KEY"]:
-            if env_key in os.environ:
-                del os.environ[env_key]
-                
+        # تمرير المفتاح بوضوح لعميل جيميني
         if key:
             return genai.Client(api_key=key)
-        return genai.Client()
+        raise ValueError("No API keys found in the pool.")
 
     @classmethod
     def smart_process_command(cls, user_text: str, branch: str, chat_history: list = None):
@@ -80,14 +69,14 @@ class AIService:
         }}
         """
         
-        max_retries = max(len(api_keys), 1)
+        max_retries = len(api_keys)
         for attempt in range(max_retries):
             try:
                 client = cls.get_client()
                 
                 # استخدام الموديل المطلوب بدقة
                 response = client.models.generate_content(
-                    model='gemini-3.6-flash',
+                    model='gemini-2.5-flash',  # أو gemini-3.6-flash حسب المتاح في SDK لديك
                     contents=prompt
                 )
                 
@@ -109,7 +98,8 @@ class AIService:
                     }
             except Exception as e:
                 err_str = str(e)
-                if any(err in err_str.lower() for err in ["429", "quota", "limit", "401", "unauthorized", "token", "not found", "400"]):
+                # إذا حدث خطأ استنفاد حصة أو خطأ في المفتاح، ننتقل للمفتاح التالي تلقائياً
+                if any(err in err_str.lower() for err in ["429", "quota", "limit", "401", "unauthorized", "token", "not found", "400", "no api key"]):
                     cls.current_key_index = (cls.current_key_index + 1) % len(api_keys)
                     continue
                 else:
