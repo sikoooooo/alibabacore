@@ -8,9 +8,9 @@ except ImportError:
 import google.generativeai as genai
 from core.database import supabase
 
-# 🔑 قائمة مفاتيح الـ API مباشرة داخل الكود (بدون سيكريت)
+# 🔑 قائمة مفاتيح الـ API (تمت مراجعة الفواصل والعناصر بدقة)
 api_keys = [
-    "AQ.Ab8RN6I6hnoEy5aNRBFLo00dNpr_tE6tkZLRpkWb0nfgpVzr2w"
+    "AQ.Ab8RN6I6hnoEy5aNRBFLo00dNpr_tE6tkZLRpkWb0nfgpVzr2w",
     "AQ.Ab8RN6KsmZlOVBitqBHl9MTKvhDTCrOkLckSZOLq5opLxEM97g",
     "AQ.Ab8RN6IOOQs421k9-f9CtpYl-b7mKWe1ID2e-VODE8WbGDLy0g",
     "AQ.Ab8RN6LDnxPObId4PxP_7RWvXtPSekj6ftHZ6AIwiVKyVQso5Q",
@@ -63,11 +63,9 @@ class AIService:
         max_retries = max(len(api_keys), 1)
         for attempt in range(max_retries):
             try:
-                # اختيار وتكوين المفتاح الحالي بالدور
                 current_key = api_keys[cls.current_key_index % len(api_keys)]
                 genai.configure(api_key=current_key)
                 
-                # استخدام الموديل المستقر
                 model = genai.GenerativeModel('gemini-1.5-flash')
                 response = model.generate_content(prompt)
                 
@@ -89,8 +87,7 @@ class AIService:
                     }
             except Exception as e:
                 err_str = str(e)
-                # إذا حدث استنفاد حصة أو خطأ مفتاح، انتقل للمفتاح التالي فوراً
-                if any(err in err_str.lower() for err in ["429", "quota", "limit", "401", "unauthorized", "token", "resourceexhausted"]):
+                if any(err in err_str.lower() for err in ["429", "quota", "limit", "401", "unauthorized", "token", "resourceexhausted", "api key"]):
                     cls.current_key_index = (cls.current_key_index + 1) % len(api_keys)
                     continue
                 else:
