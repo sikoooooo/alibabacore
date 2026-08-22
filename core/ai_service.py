@@ -1,10 +1,10 @@
 import json
+import os
 try:
     import streamlit as st
 except ImportError:
     st = None
 
-# استدعاء المكتبة الحديثة لحل مشكلة ModuleNotFoundError
 from google import genai
 from core.database import supabase
 
@@ -32,6 +32,12 @@ class AIService:
     @classmethod
     def get_client(cls):
         key = api_keys[cls.current_key_index % len(api_keys)] if api_keys else ""
+        
+        # تنظيف بيئة السيرفر مؤقتاً لمنع تعارض مكتبة جوجل وإجبارها على استخدام المفتاح الممرر
+        for env_key in ["GOOGLE_API_KEY", "GEMINI_API_KEY"]:
+            if env_key in os.environ:
+                del os.environ[env_key]
+                
         if key:
             return genai.Client(api_key=key)
         return genai.Client()
@@ -79,7 +85,7 @@ class AIService:
             try:
                 client = cls.get_client()
                 
-                # استخدام الموديل المطلوب بدقة بناءً على طلبك
+                # استخدام الموديل المطلوب بدقة
                 response = client.models.generate_content(
                     model='gemini-3.6-flash',
                     contents=prompt
@@ -103,7 +109,7 @@ class AIService:
                     }
             except Exception as e:
                 err_str = str(e)
-                if any(err in err_str.lower() for err in ["429", "quota", "limit", "401", "unauthorized", "token"]):
+                if any(err in err_str.lower() for err in ["429", "quota", "limit", "401", "unauthorized", "token", "not found", "400"]):
                     cls.current_key_index = (cls.current_key_index + 1) % len(api_keys)
                     continue
                 else:
@@ -122,5 +128,5 @@ class AIService:
             "quantity": 1.0,
             "unit": "وحدة",
             "unit_price": 0.0,
-            "message_to_user": "⚠️ تم استنفاد حصة جميع مفاتيح API المتاحة مؤقتاً."
+            "message_to_user": "⚠️ تم استنفاد حصة جميع مفاتيح API المتاحة مؤقتاً، برجاء المحاولة بعد قليل."
         }
