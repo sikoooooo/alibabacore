@@ -8,7 +8,7 @@ except ImportError:
 import google.generativeai as genai
 from core.database import supabase
 
-# 🔑 قائمة مفاتيح الـ API (تمت مراجعة الفواصل والعناصر بدقة)
+# 🔑 قائمة مفاتيح الـ API
 api_keys = [
     "AQ.Ab8RN6I6hnoEy5aNRBFLo00dNpr_tE6tkZLRpkWb0nfgpVzr2w",
     "AQ.Ab8RN6KsmZlOVBitqBHl9MTKvhDTCrOkLckSZOLq5opLxEM97g",
@@ -60,8 +60,8 @@ class AIService:
         }}
         """
         
-        max_retries = max(len(api_keys), 1)
-        for attempt in range(max_retries):
+        # تجربة المفاتيح بشكل مباشر ومنظم
+        for _ in range(len(api_keys)):
             try:
                 current_key = api_keys[cls.current_key_index % len(api_keys)]
                 genai.configure(api_key=current_key)
@@ -87,17 +87,21 @@ class AIService:
                     }
             except Exception as e:
                 err_str = str(e)
-                if any(err in err_str.lower() for err in ["429", "quota", "limit", "401", "unauthorized", "token", "resourceexhausted", "api key"]):
+                print(f"⚠️ خطأ مع المفتاح الحالي (Index {cls.current_key_index}): {err_str}")
+                
+                # الانتقال للمفتاح التالي في حال حدوث خطأ حقيقي في الـ Quota أو الصلاحية
+                if any(err in err_str.lower() for err in ["429", "quota", "limit", "resourceexhausted", "unauthorized"]):
                     cls.current_key_index = (cls.current_key_index + 1) % len(api_keys)
                     continue
                 else:
+                    # لو الخطأ بسبب صياغة الرد أو شيء آخر، نرجع تفاصيل الخطأ بدلاً من رسالة الاستنفاد الوهمية
                     return {
                         "type": "INCOMPLETE",
                         "item_name": "غير محدد",
                         "quantity": 1.0,
                         "unit": "وحدة",
                         "unit_price": 0.0,
-                        "message_to_user": f"حدث خطأ أثناء معالجة الذكاء الاصطناعي: {err_str}"
+                        "message_to_user": f"حدث خطأ تقني في المعالجة: {err_str}"
                     }
 
         return {
@@ -106,5 +110,5 @@ class AIService:
             "quantity": 1.0,
             "unit": "وحدة",
             "unit_price": 0.0,
-            "message_to_user": "⚠️ تم استنفاد حصة جميع مفاتيح API المتاحة مؤقتاً، برجاء المحاولة بعد قليل."
+            "message_to_user": "⚠️ عذراً، تعذر تنفيذ الطلب باستخدام المفاتيح الحالية."
         }
