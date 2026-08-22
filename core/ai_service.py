@@ -76,7 +76,7 @@ class AIService:
                 
                 # استخدام الموديل المطلوب بدقة
                 response = client.models.generate_content(
-                    model='gemini-2.5-flash',  # أو gemini-3.6-flash حسب المتاح في SDK لديك
+                    model='gemini-3.6-flash',  # أو gemini-3.6-flash حسب المتاح في SDK لديك
                     contents=prompt
                 )
                 
