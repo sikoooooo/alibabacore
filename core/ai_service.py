@@ -80,7 +80,7 @@ class AIService:
                     
                 genai.configure(api_key=current_key)
                 
-                model = genai.GenerativeModel('gemini-1.5-flash')
+                model = genai.GenerativeModel('gemini-3.6-flash')
                 response = model.generate_content(prompt)
                 
                 clean_text = response.text.replace("```json", "").replace("```", "").strip()
