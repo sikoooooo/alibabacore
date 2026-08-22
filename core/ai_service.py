@@ -5,7 +5,7 @@ try:
 except ImportError:
     st = None
 
-from google import genai
+import google.generativeai as genai
 from core.database import supabase
 
 # 🔑 قائمة مفاتيح الـ API مباشرة داخل الكود (بدون سيكريت)
@@ -20,16 +20,6 @@ api_keys = [
 
 class AIService:
     current_key_index = 0
-
-    @classmethod
-    def get_client(cls):
-        # اختيار المفتاح الحالي بناءً على المؤشر بالدور (Round-Robin)
-        key = api_keys[cls.current_key_index % len(api_keys)] if api_keys else ""
-        
-        # تمرير المفتاح بوضوح لعميل جيميني
-        if key:
-            return genai.Client(api_key=key)
-        raise ValueError("No API keys found in the pool.")
 
     @classmethod
     def smart_process_command(cls, user_text: str, branch: str, chat_history: list = None):
@@ -69,16 +59,16 @@ class AIService:
         }}
         """
         
-        max_retries = len(api_keys)
+        max_retries = max(len(api_keys), 1)
         for attempt in range(max_retries):
             try:
-                client = cls.get_client()
+                # اختيار وتكوين المفتاح الحالي بالدور
+                current_key = api_keys[cls.current_key_index % len(api_keys)]
+                genai.configure(api_key=current_key)
                 
-                # استخدام الموديل المطلوب بدقة
-                response = client.models.generate_content(
-                    model='gemini-3.6-flash',  # أو gemini-3.6-flash حسب المتاح في SDK لديك
-                    contents=prompt
-                )
+                # استخدام الموديل المستقر
+                model = genai.GenerativeModel('gemini-1.5-flash')
+                response = model.generate_content(prompt)
                 
                 clean_text = response.text.replace("```json", "").replace("```", "").strip()
                 
@@ -98,8 +88,8 @@ class AIService:
                     }
             except Exception as e:
                 err_str = str(e)
-                # إذا حدث خطأ استنفاد حصة أو خطأ في المفتاح، ننتقل للمفتاح التالي تلقائياً
-                if any(err in err_str.lower() for err in ["429", "quota", "limit", "401", "unauthorized", "token", "not found", "400", "no api key"]):
+                # إذا حدث استنفاد حصة أو خطأ مفتاح، انتقل للمفتاح التالي فوراً
+                if any(err in err_str.lower() for err in ["429", "quota", "limit", "401", "unauthorized", "token", "resourceexhausted"]):
                     cls.current_key_index = (cls.current_key_index + 1) % len(api_keys)
                     continue
                 else:
