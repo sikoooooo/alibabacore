@@ -4,11 +4,11 @@ try:
 except ImportError:
     st = None
 
-# استخدام المكتبة الحديثة المتوافقة مع المفاتيح الجديدة
+# استدعاء المكتبة الحديثة لحل مشكلة ModuleNotFoundError
 from google import genai
 from core.database import supabase
 
-# 1. سحب جميع المفاتيح من Streamlit Secrets تلقائياً
+# سحب المفاتيح من السيكريت تلقائياً
 api_keys = []
 if st and hasattr(st, "secrets"):
     for key_name in ["GOOGLE_API_KEY", "GOOGLE_API_KEY_1", "GOOGLE_API_KEY_2", "GOOGLE_API_KEY_3", "GOOGLE_API_KEY_4", "GEMINI_API_KEY"]:
@@ -31,7 +31,6 @@ class AIService:
 
     @classmethod
     def get_client(cls):
-        # 2. تهيئة الاتصال بجوجل
         key = api_keys[cls.current_key_index % len(api_keys)] if api_keys else ""
         if key:
             return genai.Client(api_key=key)
@@ -78,12 +77,14 @@ class AIService:
         max_retries = max(len(api_keys), 1)
         for attempt in range(max_retries):
             try:
-                # 3. استدعاء الذكاء الاصطناعي
                 client = cls.get_client()
+                
+                # استخدام الموديل المطلوب بدقة بناءً على طلبك
                 response = client.models.generate_content(
-                    model='gemini-2.5-flash',
+                    model='gemini-3.6-flash',
                     contents=prompt
                 )
+                
                 clean_text = response.text.replace("```json", "").replace("```", "").strip()
                 
                 start_idx = clean_text.find('{')
@@ -102,7 +103,6 @@ class AIService:
                     }
             except Exception as e:
                 err_str = str(e)
-                # 4. نظام التبديل التلقائي إذا كان المفتاح مستنفذ أو به مشكلة
                 if any(err in err_str.lower() for err in ["429", "quota", "limit", "401", "unauthorized", "token"]):
                     cls.current_key_index = (cls.current_key_index + 1) % len(api_keys)
                     continue
