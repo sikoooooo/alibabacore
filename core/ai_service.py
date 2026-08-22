@@ -8,16 +8,25 @@ except ImportError:
 import google.generativeai as genai
 from core.database import supabase
 
-# 🔑 قائمة مفاتيح الـ API
-api_keys = [
-    "AQ.Ab8RN6I6hnoEy5aNRBFLo00dNpr_tE6tkZLRpkWb0nfgpVzr2w",
-    "AQ.Ab8RN6KsmZlOVBitqBHl9MTKvhDTCrOkLckSZOLq5opLxEM97g",
-    "AQ.Ab8RN6IOOQs421k9-f9CtpYl-b7mKWe1ID2e-VODE8WbGDLy0g",
-    "AQ.Ab8RN6LDnxPObId4PxP_7RWvXtPSekj6ftHZ6AIwiVKyVQso5Q",
-    "AQ.Ab8RN6IXSRGUETheaRkxa2JuolYCfGIL-888kwz8J9-OfWZ4Gw",
-    "AQ.Ab8RN6K7vSSUfuhGYpcuwDBFOwwFa_F5lj-nsNeWulqimXRBFA",
-    "AQ.Ab8RN6LTwEmXPjHD7K7HX_U8leyMSkkLOIwo7VNff3FLn3PKQA"
-]
+# سحب المفاتيح بأمان من خنة الأسرار في Streamlit (لا تظهر أبدًا على GitHub)
+api_keys = []
+if st and hasattr(st, "secrets"):
+    # البحث عن المفردات الفردية
+    for key_name in ["GOOGLE_API_KEY", "GOOGLE_API_KEY_1", "GOOGLE_API_KEY_2", "GOOGLE_API_KEY_3", "GOOGLE_API_KEY_4", "GOOGLE_API_KEY_5", "GEMINI_API_KEY"]:
+        val = st.secrets.get(key_name, "")
+        if val and val not in api_keys:
+            api_keys.append(val)
+            
+    # أو سحبها كقائمة مفصولة بفواصل من خيار واحد
+    if "GOOGLE_API_KEYS" in st.secrets:
+        extra_keys = st.secrets["GOOGLE_API_KEYS"].split(",")
+        for k in extra_keys:
+            k_clean = k.strip()
+            if k_clean and k_clean not in api_keys:
+                api_keys.append(k_clean)
+
+if not api_keys:
+    api_keys = [""]
 
 class AIService:
     current_key_index = 0
@@ -60,10 +69,13 @@ class AIService:
         }}
         """
         
-        # تجربة المفاتيح بشكل مباشر ومنظم
-        for _ in range(len(api_keys)):
+        max_retries = max(len(api_keys), 1)
+        for _ in range(max_retries):
             try:
                 current_key = api_keys[cls.current_key_index % len(api_keys)]
+                if not current_key:
+                    raise ValueError("No valid API key available")
+                    
                 genai.configure(api_key=current_key)
                 
                 model = genai.GenerativeModel('gemini-1.5-flash')
@@ -87,22 +99,9 @@ class AIService:
                     }
             except Exception as e:
                 err_str = str(e)
-                print(f"⚠️ خطأ مع المفتاح الحالي (Index {cls.current_key_index}): {err_str}")
-                
-                # الانتقال للمفتاح التالي في حال حدوث خطأ حقيقي في الـ Quota أو الصلاحية
-                if any(err in err_str.lower() for err in ["429", "quota", "limit", "resourceexhausted", "unauthorized"]):
-                    cls.current_key_index = (cls.current_key_index + 1) % len(api_keys)
-                    continue
-                else:
-                    # لو الخطأ بسبب صياغة الرد أو شيء آخر، نرجع تفاصيل الخطأ بدلاً من رسالة الاستنفاد الوهمية
-                    return {
-                        "type": "INCOMPLETE",
-                        "item_name": "غير محدد",
-                        "quantity": 1.0,
-                        "unit": "وحدة",
-                        "unit_price": 0.0,
-                        "message_to_user": f"حدث خطأ تقني في المعالجة: {err_str}"
-                    }
+                # التبديل التلقائي عند أي خطأ في الكوتا أو الصلاحية
+                cls.current_key_index = (cls.current_key_index + 1) % len(api_keys)
+                continue
 
         return {
             "type": "INCOMPLETE",
@@ -110,5 +109,5 @@ class AIService:
             "quantity": 1.0,
             "unit": "وحدة",
             "unit_price": 0.0,
-            "message_to_user": "⚠️ عذراً، تعذر تنفيذ الطلب باستخدام المفاتيح الحالية."
+            "message_to_user": "⚠️ تم استنفاد حصة جميع مفاتيح API المتاحة أو حدث خطأ في المصادقة."
         }
