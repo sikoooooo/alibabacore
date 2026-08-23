@@ -22,24 +22,28 @@ try:
 except ImportError:
     supabase = None
 
-# إعداد مفاتيح الذكاء الاصطناعي
-API_KEYS_POOL = [
-    "AIzaSyYourKeyHere"  # تأكد من وضع مفتاحك الصحيح هنا
-]
+# سحب المفاتيح مباشرة من Streamlit Secrets بأمان تام
+API_KEYS_POOL = []
+if st and hasattr(st, "secrets") and st.secrets:
+    for secret_key, val in st.secrets.items():
+        if val and isinstance(val, str) and (val.startswith("AIza") or val.startswith("AQ.") or len(val) > 20):
+            if val not in API_KEYS_POOL:
+                API_KEYS_POOL.append(val)
 
 if "api_key_index" not in st.session_state: 
     st.session_state.api_key_index = 0
 
 def get_next_api_key():
     if not API_KEYS_POOL: return None
-    current_key = API_KEYS_POOL[st.session_state.api_key_index]
+    current_key = API_KEYS_POOL[st.session_state.api_key_index % len(API_KEYS_POOL)]
     st.session_state.api_key_index = (st.session_state.api_key_index + 1) % len(API_KEYS_POOL)
     return current_key
 
 def execute_with_key_rotation(user_input, branch, branch_rules, messages):
     if not AIService:
         return None, "خدمة الذكاء الاصطناعي غير متوفرة."
-    attempts = len(API_KEYS_POOL)
+    
+    attempts = max(len(API_KEYS_POOL), 1)
     last_error = None
     for _ in range(attempts):
         active_key = get_next_api_key()
@@ -81,7 +85,7 @@ with main_tab:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    if user_input := st.chat_input("سجل معاملتك (مثال: بعنا طقم كاوتش ميشلان لأحمد بـ 6000 دفع 2000 مقدم والباقي قسط 1000 شهرياً) أو اسأل عن الأقساط"):
+    if user_input := st.chat_input("سجل معاملتك أو اسأل عن الأقساط (مثال: قسط محمود الصاوي)"):
         st.session_state.messages.append({"role": "user", "content": user_input})
         with st.chat_message("user"): 
             st.markdown(user_input)
@@ -96,6 +100,7 @@ with main_tab:
                     trans_type = parsed.get("type")
                     ai_message = parsed.get("message_to_user", "تم الاستلام.")
 
+                    # 1. إذا كانت عملية بيع أو شراء
                     if trans_type in ["PURCHASE", "SALE"] and InventoryService:
                         try:
                             success, msg = InventoryService.execute_transaction(branch, parsed, user_input)
@@ -106,8 +111,8 @@ with main_tab:
                         except Exception as e:
                             response_text = f"{ai_message}\n\n⚠️ *خطأ في التنفيذ: {str(e)}*"
                     
+                    # 2. إذا كان سؤالاً أو استعلاماً عن الأقساط والعملاء
                     elif trans_type == "QUERY" and supabase:
-                        # جلب البيانات الحقيقية من جدول الأقساط بناءً على الاستعلام
                         customer_query = parsed.get("supplier", "").strip()
                         try:
                             q_builder = supabase.table("installments").select("*").eq("branch", branch)
@@ -123,6 +128,8 @@ with main_tab:
                                 response_text = f"🔍 لم يتم العثور على أقساط مطابقة في قاعدة البيانات بهذا الاسم ({customer_query})."
                         except Exception as ex:
                             response_text = f"⚠️ حدث خطأ أثناء الاستعلام من قاعدة البيانات: {str(ex)}"
+                    
+                    # 3. لأي حالة أخرى
                     else:
                         response_text = ai_message
 
