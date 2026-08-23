@@ -24,8 +24,8 @@ class AIService:
 
         🧠 قواعد الفهم والتصنيف:
         1. إذا كانت الرسالة تسجيل عملية شراء أو بيع بضاعة، اجعل `type` إما "PURCHASE" أو "SALE".
-        2. إذا كانت الرسالة **سؤالاً أو استعلاماً** عن الأقساط، الديون، العملاء، أو المخزن (مثل: "موقف أقساط محمود الصاوي" أو "أقساط شهر 9")، اجعل `type` تساوي "QUERY".
-        3. استخرج اسم العميل (`supplier` أو `customer_name`) إن وجد في نص الاستعلام.
+        2. إذا كانت الرسالة **سؤالاً أو استعلاماً** عن الأقساط، الديون، العملاء، أو مواعيد الاستحقاق (مثل: "قسط محمود الصاوي القادم" أو "أقساط شهر 9")، اجعل `type` تساوي "QUERY".
+        3. استخرج اسم العميل (`supplier` أو `customer_name`) إن وجد، واستخرج الشهر أو موعد الاستحقاق (`due_date`) إن ذكر.
 
         نسق المخرجات داخل هيكل JSON التالي حصرياً ودون أي نصوص إضافية:
         {{
@@ -39,6 +39,7 @@ class AIService:
             "is_installment": false,
             "down_payment": 0.0,
             "installment_value": 0.0,
+            "due_date": "تاريخ الاستحقاق أو الشهر المستهدف أو غير محدد",
             "message_to_user": "رد احترافي أو توجيهي"
         }}
         """
@@ -67,6 +68,7 @@ class AIService:
                     break
                     
                 genai.configure(api_key=current_key)
+                # قاعدة صارمة وثابتة: استخدام موديل gemini-3.5-flash-lite حصرياً
                 model = genai.GenerativeModel('gemini-3.5-flash-lite')
                 response = model.generate_content(prompt)
                 
@@ -94,5 +96,6 @@ class AIService:
             "is_installment": False,
             "down_payment": 0.0,
             "installment_value": 0.0,
+            "due_date": "غير محدد",
             "message_to_user": f"⚠️ خطأ في المعالجة: {last_error_msg}"
         }
