@@ -28,7 +28,6 @@ def get_next_api_key():
     if not API_KEYS_POOL:
         return None
     current_key = API_KEYS_POOL[st.session_state.api_key_index]
-    # التبديل للمفتاح التالي والعودة للبداية إذا انتهت القائمة
     st.session_state.api_key_index = (st.session_state.api_key_index + 1) % len(API_KEYS_POOL)
     return current_key
 
@@ -40,20 +39,17 @@ def execute_with_key_rotation(user_input, branch, messages):
     for _ in range(attempts):
         active_key = get_next_api_key()
         if active_key:
-            # تعيين المفتاح مؤقتاً لبيئة التشغيل لكي تقرأه المكتبة
             os.environ["GOOGLE_API_KEY"] = active_key
             os.environ["GEMINI_API_KEY"] = active_key
             
         try:
-            # محاولة المعالجة بالمفتاح الحالي
             return AIService.smart_process_command(user_input, branch, messages), None
         except Exception as e:
             last_error = str(e)
-            # التحقق إذا كان الخطأ بسبب استنفاد الحصة (Quota / ResourceExhausted / 429)
             if any(err_word in last_error.lower() for err_word in ["resourceexhausted", "quota", "429", "exhausted"]):
-                continue # الانتقال للمفتاح التالي في القائمة تلقائياً
+                continue
             else:
-                break # إذا كان خطأ برمجي آخر، نخرج ونظهره
+                break
                 
     return None, last_error
 
@@ -140,11 +136,14 @@ with main_tab:
                                 if inv_res.data:
                                     if item_name and item_name != "غير محدد" and item_name != "عام":
                                         matched_item = inv_res.data[0]
-                                        qty = matched_item['total_base_quantity']
-                                        unit_label = "طن" if "طن" in user_input or qty >= 10 else "وحدة"
-                                        response_text = f"📦 رصيد **{matched_item['item_name']}** في {branch} هو: **{qty} {unit_label}** (متوسط التكلفة: {matched_item.get('avg_cost_per_base', 0):,.2f} ج.م)"
+                                        qty_raw = matched_item['total_base_quantity']
+                                        
+                                        # استدعاء دالة التنسيق المزدوج (كراتين ووحدات) من InventoryService
+                                        formatted_stock = InventoryService.format_stock_display(qty_raw, units_per_carton=12)
+                                        
+                                        response_text = f"📦 رصيد **{matched_item['item_name']}** في {branch} هو: **{formatted_stock}** (متوسط التكلفة: {matched_item.get('avg_cost_per_base', 0):,.2f} ج.م)"
                                     else:
-                                        items_summary = "\n".join([f"- **{i['item_name']}**: {i['total_base_quantity']} وحدة" for i in inv_res.data])
+                                        items_summary = "\n".join([f"- **{i['item_name']}**: {InventoryService.format_stock_display(i['total_base_quantity'], 12)}" for i in inv_res.data])
                                         response_text = f"📊 **ملخص مخزن {branch}:**\n\n{items_summary}"
                                 else:
                                     response_text = f"📂 عذراً، لا توجد بيانات مسجلة للصنف '{item_name}' في {branch}."
