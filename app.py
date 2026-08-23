@@ -138,12 +138,12 @@ with main_tab:
                                         matched_item = inv_res.data[0]
                                         qty_raw = matched_item['total_base_quantity']
                                         
-                                        # استدعاء دالة التنسيق الذكية مع اسم الصنف لاستنباط الوحدة الصغرى (زجاجة، كيس، علبة...)
-                                        formatted_stock = InventoryService.format_stock_display(matched_item['item_name'], qty_raw, units_per_carton=12)
+                                        # استدعاء دالة التنسيق بوضوح ومرونة
+                                        formatted_stock = InventoryService.format_stock_display(matched_item['item_name'], qty_raw)
                                         
                                         response_text = f"📦 رصيد **{matched_item['item_name']}** في {branch} هو: **{formatted_stock}** (متوسط التكلفة: {matched_item.get('avg_cost_per_base', 0):,.2f} ج.م)"
                                     else:
-                                        items_summary = "\n".join([f"- **{i['item_name']}**: {InventoryService.format_stock_display(i['item_name'], i['total_base_quantity'], 12)}" for i in inv_res.data])
+                                        items_summary = "\n".join([f"- **{i['item_name']}**: {InventoryService.format_stock_display(i['item_name'], i['total_base_quantity'])}" for i in inv_res.data])
                                         response_text = f"📊 **ملخص مخزن {branch}:**\n\n{items_summary}"
                                 else:
                                     response_text = f"📂 عذراً، لا توجد بيانات مسجلة للصنف '{item_name}' في {branch}."
