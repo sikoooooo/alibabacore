@@ -6,9 +6,7 @@ except ImportError:
     st = None
 
 import google.generativeai as genai
-from core.database import supabase
 
-# سحب المفاتيح بمرونة شديدة من الـ Secrets
 api_keys = []
 if st and hasattr(st, "secrets") and st.secrets:
     for secret_key, val in st.secrets.items():
@@ -23,101 +21,77 @@ class AIService:
     current_key_index = 0
 
     @classmethod
-    def smart_process_command(cls, user_text: str, branch: str, chat_history: list = None):
+    def smart_process_command(cls, user_text: str, branch: str, branch_rules: list = None, chat_history: list = None):
         if chat_history is None: 
             chat_history = []
+        if branch_rules is None:
+            branch_rules = []
         
-        try:
-            rules_res = supabase.table("business_rules").select("*").eq("branch", branch).execute()
-            known_rules = rules_res.data if rules_res.data else []
-        except Exception:
-            known_rules = []
-            
-        history_context = "\n".join([f"- {msg['role']}: {msg['content']}" for msg in chat_history[-3:]]) if chat_history else "لا يوجد سياق سابق."
+        history_context = "\n".join([f"- {m['role']}: {m['content']}" for m in chat_history[-2:]]) if chat_history else "لا يوجد سياق."
         
         prompt = f"""
-        أنت محاسب ذكي لنظام ERP متطور. مهمتك تحليل كلام التاجر واستخراج بيانات المعاملة أو الاستعلام بدقة.
-        قواعد ومعلومات الفرع المعروفة: {known_rules}
-        سياق آخر رسائل بينك وبين التاجر:
-        {history_context}
+        أنت المحاسب الذكي لنظام ERP. حلل كلام التاجر واستخرج بيانات المعاملة.
+        قواعد الفرع: {branch_rules}
+        رسالة التاجر: "{user_text}"
 
-        الرسالة الحالية من المستخدم: "{user_text}"
+        🧠 قواعد الفهم (إجباري):
+        1. الكمية (`quantity`): احسب الإجمالي بالوحدة الصغرى دائماً. لو ذكر كراتين اضرب الرقمين.
+        2. السعر (`unit_price`): سعر الوحدة الصغرى الواحدة فقط!
+        3. المورد/العميل (`supplier`): استخرج اسم الشركة أو الشخص.
+        4. الماركة (`brand`): استخرج اسم الماركة المصنعة.
+        5. التقسيط (`is_installment`): إذا كانت العملية بيع بالتقسيط أو شراء آجل، اجعلها true واستخرج المقدم (`down_payment`) وقيمة القسط (`installment_value`).
 
-        صنف الرسالة بدقة إلى أحد الأنواع التالية:
-        - "PURCHASE" (شراء بضاعة أو إدخال وارد للمخزن)
-        - "SALE" (بيع بضاعة أو إخراج من المخزن)
-        - "QUERY" (استعلام عن رصيد صنف، بضاعة، حالة المخزن، أو تقارير)
-        - "INCOMPLETE" (بيانات ناقصة تماماً)
-
-        ⚠️ **قواعد حاسمة وحازمة لمعالجة الكراتين والوحدات والأسعار (نظام الوحدة الصغرى):**
-        1. **حساب الكمية (`quantity`):** يجب أن تكون قيمة `quantity` دائماً محسوبة بالوحدة الصغرى الأساسية (كيس، زجاجة، علبة، قطعة، باكو).
-           - إذا ذكر المستخدم الشراء أو البيع بالكرتونة (مثلاً: 10 كراتين، الكرتونة 12 كيس)، اضرب عدد الكراتين في سعة الكرتونة إجبارياً وأخرج الناتج النهائي: `quantity: 120`.
-           - إذا لم يحدد سعة الكرتونة، افترض افتراضياً أن الكرتونة = 12 وحدة صغرى.
-        2. **اسم الصنف (`item_name`):** استخرج اسم الصنف مجرداً تماماً بدون ذكر أعداد الكراتين (مثلاً: "مكرونة قلم" وليس "10 كراتين مكرونة").
-        3. **سعر الوحدة (`unit_price`):** يجب أن يكون سعر الوحدة الصغرى الواحدة فقط!
-           - إذا ذكر إجمالي المبلغ (مثلاً: 10000 جنيه لـ 10 كراتين كل كرتونة 12 كيس -> الإجمالي 120 كيس)، اقسم الإجمالي على إجمالي الأكياس (`10000 / 120 = 83.33`).
-           - إذا ذكر سعر الكرتونة (مثلاً: الكرتونة بـ 1200 جنيه وسعتها 12 كيس)، اقسم سعر الكرتونة على أكياسها (`1200 / 12 = 100`).
-        4. **إياك أن ترسل عدد الكراتين كـ quantity أو سعر الكرتونة كـ unit_price.**
-
-        أخرج النتيجة ككود JSON حصرياً بدون أي نصوص أو شروحات خارجه:
+        نسق المخرجات داخل هيكل JSON التالي حصرياً:
         {{
-            "type": "PURCHASE" أو "SALE" أو "QUERY" أو "INCOMPLETE",
-            "item_name": "اسم الصنف مجرداً",
-            "quantity": 1.0 (رقم فقط يمثل إجمالي الأكياس/القطع الصغرى),
-            "unit": "الوحدة الصغرى (كيس / زجاجة / علبة / قطعة)",
-            "unit_price": 0.0 (تكلفة الوحدة الصغرى الواحدة بالجنيه),
-            "message_to_user": "رد احترافي يوضح التفكيك والعملية الحسابية التي تمت بالكامل"
+            "type": "PURCHASE" | "SALE" | "QUERY" | "INCOMPLETE",
+            "item_name": "اسم الصنف",
+            "brand": "اسم الماركة أو غير محدد",
+            "supplier": "اسم المورد/العميل أو غير محدد",
+            "quantity": 1.0,
+            "unit": "الوحدة الصغرى",
+            "unit_price": 0.0,
+            "is_installment": false,
+            "down_payment": 0.0,
+            "installment_value": 0.0,
+            "message_to_user": "رد احترافي يشرح الحسبة، الماركة، المورد، وتفاصيل التقسيط إن وجد"
         }}
         """
         
         max_retries = max(len(api_keys), 1)
         last_error_msg = ""
         
+        generation_config = genai.GenerationConfig(
+            response_mime_type="application/json",
+            temperature=0.1,
+            max_output_tokens=500
+        )
+
         for _ in range(max_retries):
             try:
                 current_key = api_keys[cls.current_key_index % len(api_keys)]
                 if not current_key:
-                    return {
-                        "type": "INCOMPLETE",
-                        "item_name": "غير محدد",
-                        "quantity": 1.0,
-                        "unit": "وحدة",
-                        "unit_price": 0.0,
-                        "message_to_user": "⚠️ تنبيه: لم يتم العثور على أي مفاتيح API في إعدادات الأسرار (Secrets) على Streamlit."
-                    }
+                    break
                     
                 genai.configure(api_key=current_key)
-                
-                model = genai.GenerativeModel('gemini-3.6-flash')
+                model = genai.GenerativeModel('gemini-1.5-flash', generation_config=generation_config)
                 response = model.generate_content(prompt)
                 
-                clean_text = response.text.replace("```json", "").replace("```", "").strip()
-                
-                start_idx = clean_text.find('{')
-                end_idx = clean_text.rfind('}')
-                if start_idx != -1 and end_idx != -1:
-                    json_str = clean_text[start_idx:end_idx+1]
-                    return json.loads(json_str)
-                else:
-                    return {
-                        "type": "INCOMPLETE",
-                        "item_name": "غير محدد",
-                        "quantity": 1.0,
-                        "unit": "وحدة",
-                        "unit_price": 0.0,
-                        "message_to_user": "عذراً، لم أفهم تفاصيل طلبك بدقة."
-                    }
+                return json.loads(response.text.strip())
             except Exception as e:
-                err_str = str(e)
-                last_error_msg = err_str
+                last_error_msg = str(e)
                 cls.current_key_index = (cls.current_key_index + 1) % len(api_keys)
                 continue
 
         return {
             "type": "INCOMPLETE",
             "item_name": "غير محدد",
+            "brand": "غير محدد",
+            "supplier": "غير محدد",
             "quantity": 1.0,
             "unit": "وحدة",
             "unit_price": 0.0,
-            "message_to_user": f"⚠️ خطأ في المصادقة أو التنفيذ: {last_error_msg}"
+            "is_installment": False,
+            "down_payment": 0.0,
+            "installment_value": 0.0,
+            "message_to_user": f"⚠️ خطأ في المعالجة: {last_error_msg}"
         }
