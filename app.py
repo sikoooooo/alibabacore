@@ -24,12 +24,7 @@ except ImportError:
 
 # إعداد مفاتيح الذكاء الاصطناعي
 API_KEYS_POOL = [
-    "AQ.Ab8RN6KsmZlOVBitqBHl9MTKvhDTCrOkLckSZOLq5opLxEM97g",
-    "AQ.Ab8RN6IOOQs421k9-f9CtpYl-b7mKWe1ID2e-VODE8WbGDLy0g",
-    "AQ.Ab8RN6LDnxPObId4PxP_7RWvXtPSekj6ftHZ6AIwiVKyVQso5Q",
-    "AQ.Ab8RN6IXSRGUETheaRkxa2JuolYCfGIL-888kwz8J9-OfWZ4Gw",
-    "AQ.Ab8RN6K7vSSUfuhGYpcuwDBFOwwFa_F5lj-nsNeWulqimXRBFA",
-    "AQ.Ab8RN6LTwEmXPjHD7K7HX_U8leyMSkkLOIwo7VNff3FLn3PKQA"
+    "AIzaSyYourKeyHere"  # تأكد من وضع مفتاحك الصحيح هنا
 ]
 
 if "api_key_index" not in st.session_state: 
@@ -86,7 +81,7 @@ with main_tab:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    if user_input := st.chat_input("سجل معاملتك (مثال: بعنا طقم كاوتش ميشلان لأحمد بـ 6000 دفع 2000 مقدم والباقي قسط 1000 شهرياً)"):
+    if user_input := st.chat_input("سجل معاملتك (مثال: بعنا طقم كاوتش ميشلان لأحمد بـ 6000 دفع 2000 مقدم والباقي قسط 1000 شهرياً) أو اسأل عن الأقساط"):
         st.session_state.messages.append({"role": "user", "content": user_input})
         with st.chat_message("user"): 
             st.markdown(user_input)
@@ -98,13 +93,16 @@ with main_tab:
                 if error or not parsed:
                     response_text = f"⚠️ عذراً، حدث خطأ: {error}"
                 else:
-                   trans_type = parsed.get("type")
+                    trans_type = parsed.get("type")
                     ai_message = parsed.get("message_to_user", "تم الاستلام.")
 
                     if trans_type in ["PURCHASE", "SALE"] and InventoryService:
                         try:
                             success, msg = InventoryService.execute_transaction(branch, parsed, user_input)
-                            response_text = f"{ai_message}\n\n✅ *{msg}*"
+                            if success:
+                                response_text = f"{ai_message}\n\n✅ *{msg}*"
+                            else:
+                                response_text = f"{ai_message}\n\n❌ *فشل الحفظ: {msg}*"
                         except Exception as e:
                             response_text = f"{ai_message}\n\n⚠️ *خطأ في التنفيذ: {str(e)}*"
                     
