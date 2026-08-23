@@ -7,16 +7,6 @@ except ImportError:
 
 import google.generativeai as genai
 
-api_keys = []
-if st and hasattr(st, "secrets") and st.secrets:
-    for secret_key, val in st.secrets.items():
-        if val and isinstance(val, str) and (val.startswith("AIza") or val.startswith("AQ.") or len(val) > 20):
-            if val not in api_keys:
-                api_keys.append(val)
-
-if not api_keys:
-    api_keys = [""]
-
 class AIService:
     current_key_index = 0
 
@@ -27,10 +17,8 @@ class AIService:
         if branch_rules is None:
             branch_rules = []
         
-        history_context = "\n".join([f"- {m['role']}: {m['content']}" for m in chat_history[-2:]]) if chat_history else "لا يوجد سياق."
-        
         prompt = f"""
-        أنت المحاسب الذكي لنظام ERP. حلل كلام التاجر واستخرج بيانات المعاملة.
+        أنت المحاسب الذكي لنظام ERP. حلل كلام التاجر واستخرج بيانات المعاملة بدقة.
         قواعد الفرع: {branch_rules}
         رسالة التاجر: "{user_text}"
 
@@ -41,7 +29,7 @@ class AIService:
         4. الماركة (`brand`): استخرج اسم الماركة المصنعة.
         5. التقسيط (`is_installment`): إذا كانت العملية بيع بالتقسيط أو شراء آجل، اجعلها true واستخرج المقدم (`down_payment`) وقيمة القسط (`installment_value`).
 
-        نسق المخرجات داخل هيكل JSON التالي حصرياً:
+        نسق المخرجات داخل هيكل JSON التالي حصرياً ودون أي نصوص إضافية خارجه:
         {{
             "type": "PURCHASE" | "SALE" | "QUERY" | "INCOMPLETE",
             "item_name": "اسم الصنف",
@@ -57,15 +45,24 @@ class AIService:
         }}
         """
         
+        # استخراج مفاتيح الـ API المتاحة
+        api_keys = []
+        if st and hasattr(st, "secrets") and st.secrets:
+            for secret_key, val in st.secrets.items():
+                if val and isinstance(val, str) and (val.startswith("AIza") or val.startswith("AQ.") or len(val) > 20):
+                    if val not in api_keys:
+                        api_keys.append(val)
+        
+        env_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        if env_key and env_key not in api_keys:
+            api_keys.append(env_key)
+
+        if not api_keys:
+            api_keys = [""]
+
         max_retries = max(len(api_keys), 1)
         last_error_msg = ""
         
-        generation_config = genai.GenerationConfig(
-            response_mime_type="application/json",
-            temperature=0.1,
-            max_output_tokens=500
-        )
-
         for _ in range(max_retries):
             try:
                 current_key = api_keys[cls.current_key_index % len(api_keys)]
@@ -73,10 +70,23 @@ class AIService:
                     break
                     
                 genai.configure(api_key=current_key)
-                model = genai.GenerativeModel('gemini-3.6-flash', generation_config=generation_config)
+                
+                # استخدام النموذج المستقر والمعتمد
+                model = genai.GenerativeModel('gemini-1.5-flash')
                 response = model.generate_content(prompt)
                 
-                return json.loads(response.text.strip())
+                raw_text = response.text.strip()
+                
+                # تنظيف الرد من أكواد الماركداون الثلاثية لمنع حدوث Expecting value
+                if raw_text.startswith("```"):
+                    lines = raw_text.splitlines()
+                    if lines[0].startswith("```"):
+                        lines = lines[1:]
+                    if lines and lines[-1].startswith("```"):
+                        lines = lines[:-1]
+                    raw_text = "\n".join(lines).strip()
+
+                return json.loads(raw_text)
             except Exception as e:
                 last_error_msg = str(e)
                 cls.current_key_index = (cls.current_key_index + 1) % len(api_keys)
