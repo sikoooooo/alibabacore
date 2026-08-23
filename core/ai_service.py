@@ -17,30 +17,41 @@ class AIService:
         if branch_rules is None:
             branch_rules = []
         
+        # 1. تفعيل الذاكرة القصيرة: دمج آخر 6 رسائل لربط السياق
+        history_text = ""
+        if chat_history:
+            for msg in chat_history[-6:]:
+                role = "التاجر" if msg["role"] == "user" else "المحاسب"
+                history_text += f"{role}: {msg['content']}\n"
+
         prompt = f"""
-        أنت المحاسب الذكي لنظام ERP. حلل كلام التاجر وحدد نوع الطلب بدقة.
+        أنت المحاسب الذكي لنظام ERP. حلل كلام التاجر بالاعتماد التام على "سياق المحادثة السابقة" إذا كانت الرسالة الحالية تكملة (مثل تحديد سعر، كمية، أو عميل لصنف تم ذكره سابقاً).
+        
         قواعد الفرع: {branch_rules}
-        رسالة التاجر: "{user_text}"
 
-        🧠 قواعد الفهم والتصنيف:
-        1. إذا كانت الرسالة تسجيل عملية شراء أو بيع بضاعة، اجعل `type` إما "PURCHASE" أو "SALE".
-        2. إذا كانت الرسالة **سؤالاً أو استعلاماً** عن الأقساط، الديون، العملاء، أو مواعيد الاستحقاق (مثل: "قسط محمود الصاوي القادم" أو "أقساط شهر 9")، اجعل `type` تساوي "QUERY".
-        3. استخرج اسم العميل (`supplier` أو `customer_name`) إن وجد، واستخرج الشهر أو موعد الاستحقاق (`due_date`) إن ذكر.
+        سياق المحادثة السابقة (الذاكرة):
+        {history_text}
 
-        نسق المخرجات داخل هيكل JSON التالي حصرياً ودون أي نصوص إضافية:
+        الرسالة الحالية: "{user_text}"
+
+        🧠 قواعد الفهم:
+        1. إذا كانت الرسالة تكملة (مثل: "السعر 1000")، اربطها بالمعاملة السابقة واستخرج البيانات كاملة كعملية PURCHASE أو SALE.
+        2. للاستعلام عن أقساط أو ديون، اجعل `type` "QUERY" واستخرج `supplier` و `due_date`.
+
+        نسق المخرجات داخل JSON التالي حصرياً:
         {{
             "type": "PURCHASE" | "SALE" | "QUERY" | "INCOMPLETE",
             "item_name": "اسم الصنف أو غير محدد",
             "brand": "غير محدد",
-            "supplier": "اسم المورد أو العميل المستعلم عنه أو غير محدد",
+            "supplier": "اسم المورد/العميل أو غير محدد",
             "quantity": 1.0,
             "unit": "وحدة",
             "unit_price": 0.0,
             "is_installment": false,
             "down_payment": 0.0,
             "installment_value": 0.0,
-            "due_date": "تاريخ الاستحقاق أو الشهر المستهدف أو غير محدد",
-            "message_to_user": "رد احترافي أو توجيهي"
+            "due_date": "تاريخ الاستحقاق أو غير محدد",
+            "message_to_user": "رد توضيحي للتاجر"
         }}
         """
         
@@ -68,7 +79,7 @@ class AIService:
                     break
                     
                 genai.configure(api_key=current_key)
-                # قاعدة صارمة وثابتة: استخدام موديل gemini-3.5-flash-lite حصرياً
+                # 2. الموديل الثابت (لا يتغير أبداً)
                 model = genai.GenerativeModel('gemini-3.5-flash-lite')
                 response = model.generate_content(prompt)
                 
@@ -97,5 +108,5 @@ class AIService:
             "down_payment": 0.0,
             "installment_value": 0.0,
             "due_date": "غير محدد",
-            "message_to_user": f"⚠️ خطأ في المعالجة: {last_error_msg}"
+            "message_to_user": f"⚠️ خطأ: {last_error_msg}"
         }
