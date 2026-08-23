@@ -7,8 +7,8 @@ class InventoryService:
     @staticmethod
     def normalize_item_name(name: str) -> str:
         """
-        توحيد مسميات الأصناف لمنع تكرار نفس الصنف بسبب اختلاف طريقة الكتابة
-        (مثلاً: تحويل 'لتر ونصف' أو 'واحد ونصف' إلى '1.5 لتر')
+        توحيد صيغ الأرقام والوحدات فقط (مثل لتر ونصف إلى 1.5 لتر) 
+        دون المساس بالأسماء التجارية أو دمج أصناف مختلفة.
         """
         if not name:
             return "غير محدد"
@@ -20,7 +20,9 @@ class InventoryService:
             "واحد ونصف لتر": "1.5 لتر",
             "١.٥ لتر": "1.5 لتر",
             "نصف لتر": "0.5 لتر",
-            "نص لتر": "0.5 لتر"
+            "نص لتر": "0.5 لتر",
+            "٧٠٠ مل": "0.7 لتر",
+            "٨٠٠ مل": "0.8 لتر"
         }
         
         for key, val in replacements.items():
@@ -30,16 +32,41 @@ class InventoryService:
         return normalized.title()
 
     @staticmethod
-    def format_stock_display(item_name: str, total_base_qty, units_per_carton=12):
+    def format_stock_display(*args, **kwargs):
         """
-        تنسيق المخزن مع استنباط الوحدة الصغرى المناسبة لطبيعة الصنف بذكاء (كيس، زجاجة، علبة...)
+        دالة تنسيق مرنة جداً تقبل أي معاملات سواء ترتيبيّة أو باسم المتغير لمنع حدوث TypeError تماماً.
         """
+        item_name = ""
+        total_base_qty = 0
+        units_per_carton = 12
+
+        # استقبال المعاملات الترتيبية
+        if len(args) >= 2:
+            if isinstance(args[0], str):
+                item_name = args[0]
+                total_base_qty = args[1]
+                if len(args) > 2:
+                    units_per_carton = args[2]
+            else:
+                total_base_qty = args[0]
+                units_per_carton = args[1]
+        elif len(args) == 1:
+            total_base_qty = args[0]
+
+        # استقبال المعاملات المسماة (Keyword Arguments)
+        if "item_name" in kwargs:
+            item_name = kwargs["item_name"]
+        if "total_base_qty" in kwargs:
+            total_base_qty = kwargs["total_base_qty"]
+        if "units_per_carton" in kwargs:
+            units_per_carton = kwargs["units_per_carton"]
+
         try:
             qty = float(total_base_qty)
         except (TypeError, ValueError):
             return f"{total_base_qty} وحدة"
         
-        # استنباط الوحدة الصغرى تلقائياً من اسم الصنف
+        # استنباط الوحدة الصغرى بدقة حسب نوع الصنف
         name_lower = (item_name or "").lower()
         if any(w in name_lower for w in ["زيت", "عصير", "مياه", "خل", "صويا"]):
             unit_name = "زجاجة"
@@ -72,7 +99,6 @@ class InventoryService:
             trans_type = parsed_data.get("type", "SALE")
             raw_item_name = parsed_data.get("item_name", "غير محدد")
             
-            # توحيد اسم الصنف لمنع الازدواجية
             item_name = cls.normalize_item_name(raw_item_name)
             
             try:
