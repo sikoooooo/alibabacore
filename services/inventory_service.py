@@ -15,7 +15,6 @@ class InventoryService:
         
         normalized = name.strip().lower()
         
-        # استبدال الصيغ اللفظية برقم قياسي موحد
         replacements = {
             "لتر ونصف": "1.5 لتر",
             "واحد ونصف لتر": "1.5 لتر",
@@ -26,24 +25,35 @@ class InventoryService:
         
         for key, val in replacements.items():
             if key in normalized:
-                # استبدال الجزء اللفظي بالرقم القياسي مع الاحتفاظ بباقي اسم الصنف
                 normalized = normalized.replace(key, val)
                 
-        # إعادة تنسيق الحروف الأولى أو تنظيف المسافات الزائدة
         return normalized.title()
 
     @staticmethod
-    def format_stock_display(total_base_qty, units_per_carton=12):
+    def format_stock_display(item_name: str, total_base_qty, units_per_carton=12):
         """
-        تحويل الكمية الإجمالية إلى مزيج من كراتين ووحدات فردية (مثل: 19 كرتونة و 6 زجاجات)
+        تنسيق المخزن مع استنباط الوحدة الصغرى المناسبة لطبيعة الصنف بذكاء (كيس، زجاجة، علبة...)
         """
         try:
             qty = float(total_base_qty)
         except (TypeError, ValueError):
             return f"{total_base_qty} وحدة"
         
+        # استنباط الوحدة الصغرى تلقائياً من اسم الصنف
+        name_lower = (item_name or "").lower()
+        if any(w in name_lower for w in ["زيت", "عصير", "مياه", "خل", "صويا"]):
+            unit_name = "زجاجة"
+        elif any(w in name_lower for w in ["مكرونة", "سكر", "رز", "أرز", "ملح", "دقيق", "بن"]):
+            unit_name = "كيس"
+        elif any(w in name_lower for w in ["جبنة", "تونة", "صلصة", "سمنة", "حلاوة", "شاي"]):
+            unit_name = "علبة"
+        elif any(w in name_lower for w in ["بسكويت", "شيبسي", "شوكولاتة"]):
+            unit_name = "باكو"
+        else:
+            unit_name = "قطعة"
+        
         if units_per_carton <= 1:
-            return f"{qty:g} وحدة"
+            return f"{qty:g} {unit_name}"
             
         cartons = int(qty // units_per_carton)
         pieces = int(qty % units_per_carton)
@@ -52,7 +62,7 @@ class InventoryService:
         if cartons > 0:
             result_parts.append(f"{cartons} كرتونة")
         if pieces > 0 or cartons == 0:
-            result_parts.append(f"{pieces} زجاجة")
+            result_parts.append(f"{pieces} {unit_name}")
             
         return " و ".join(result_parts)
 
@@ -62,7 +72,7 @@ class InventoryService:
             trans_type = parsed_data.get("type", "SALE")
             raw_item_name = parsed_data.get("item_name", "غير محدد")
             
-            # 🧠 توحيد اسم الصنف فوراً لمنع الازدواجية
+            # توحيد اسم الصنف لمنع الازدواجية
             item_name = cls.normalize_item_name(raw_item_name)
             
             try:
@@ -77,7 +87,7 @@ class InventoryService:
 
             company_id, branch_id = db_manager.ensure_default_enterprise_setup(branch)
             if not company_id or not branch_id:
-                return False, "فشل في ج هيكل الشركة والفرع"
+                return False, "فشل في جلب هيكل الشركة والفرع"
 
             company_name = "الشركة الافتراضية العامة"
             try:
