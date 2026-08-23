@@ -18,34 +18,31 @@ class AIService:
             branch_rules = []
         
         prompt = f"""
-        أنت المحاسب الذكي لنظام ERP. حلل كلام التاجر واستخرج بيانات المعاملة بدقة.
+        أنت المحاسب الذكي لنظام ERP. حلل كلام التاجر وحدد نوع الطلب بدقة.
         قواعد الفرع: {branch_rules}
         رسالة التاجر: "{user_text}"
 
-        🧠 قواعد الفهم (إجباري):
-        1. الكمية (`quantity`): احسب الإجمالي بالوحدة الصغرى دائماً. لو ذكر كراتين اضرب الرقمين.
-        2. السعر (`unit_price`): سعر الوحدة الصغرى الواحدة فقط!
-        3. المورد/العميل (`supplier`): استخرج اسم الشركة أو الشخص.
-        4. الماركة (`brand`): استخرج اسم الماركة المصنعة.
-        5. التقسيط (`is_installment`): إذا كانت العملية بيع بالتقسيط أو شراء آجل، اجعلها true واستخرج المقدم (`down_payment`) وقيمة القسط (`installment_value`).
+        🧠 قواعد الفهم والتصنيف:
+        1. إذا كانت الرسالة تسجيل عملية شراء أو بيع بضاعة، اجعل `type` إما "PURCHASE" أو "SALE".
+        2. إذا كانت الرسالة **سؤالاً أو استعلاماً** عن الأقساط، الديون، العملاء، أو المخزن (مثل: "موقف أقساط محمود الصاوي" أو "أقساط شهر 9")، اجعل `type` تساوي "QUERY".
+        3. استخرج اسم العميل (`supplier` أو `customer_name`) إن وجد في نص الاستعلام.
 
-        نسق المخرجات داخل هيكل JSON التالي حصرياً ودون أي نصوص إضافية خارجه:
+        نسق المخرجات داخل هيكل JSON التالي حصرياً ودون أي نصوص إضافية:
         {{
             "type": "PURCHASE" | "SALE" | "QUERY" | "INCOMPLETE",
-            "item_name": "اسم الصنف",
-            "brand": "اسم الماركة أو غير محدد",
-            "supplier": "اسم المورد/العميل أو غير محدد",
+            "item_name": "اسم الصنف أو غير محدد",
+            "brand": "غير محدد",
+            "supplier": "اسم المورد أو العميل المستعلم عنه أو غير محدد",
             "quantity": 1.0,
-            "unit": "الوحدة الصغرى",
+            "unit": "وحدة",
             "unit_price": 0.0,
             "is_installment": false,
             "down_payment": 0.0,
             "installment_value": 0.0,
-            "message_to_user": "رد احترافي يشرح الحسبة، الماركة، المورد، وتفاصيل التقسيط إن وجد"
+            "message_to_user": "رد احترافي أو توجيهي"
         }}
         """
         
-        # استخراج مفاتيح الـ API المتاحة
         api_keys = []
         if st and hasattr(st, "secrets") and st.secrets:
             for secret_key, val in st.secrets.items():
@@ -70,20 +67,14 @@ class AIService:
                     break
                     
                 genai.configure(api_key=current_key)
-                
-                # استخدام النموذج المستقر والمعتمد
-                model = genai.GenerativeModel('gemini-3.5-flash-lite')
+                model = genai.GenerativeModel('gemini-1.5-flash')
                 response = model.generate_content(prompt)
                 
                 raw_text = response.text.strip()
-                
-                # تنظيف الرد من أكواد الماركداون الثلاثية لمنع حدوث Expecting value
                 if raw_text.startswith("```"):
                     lines = raw_text.splitlines()
-                    if lines[0].startswith("```"):
-                        lines = lines[1:]
-                    if lines and lines[-1].startswith("```"):
-                        lines = lines[:-1]
+                    if lines[0].startswith("```"): lines = lines[1:]
+                    if lines and lines[-1].startswith("```"): lines = lines[:-1]
                     raw_text = "\n".join(lines).strip()
 
                 return json.loads(raw_text)
