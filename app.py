@@ -44,7 +44,6 @@ def execute_with_key_rotation(user_input, branch, branch_rules, messages):
 
 branch = st.selectbox("📍 اختر الفرع:", ["الفرع الرئيسي (القاهرة)", "فرع الإسكندرية"])
 
-# 🚀 نظام الكاش السريع לקراءة القواعد
 if "current_branch" not in st.session_state or st.session_state.current_branch != branch:
     st.session_state.current_branch = branch
     try:
@@ -104,7 +103,6 @@ with reports_tab:
         if inv_res.data: st.dataframe(inv_res.data, use_container_width=True)
         else: st.info("المخزن فارغ.")
 
-    # 💳 شاشة عرض الأقساط الجديدة
     with r_tab4:
         st.markdown(f"### متابعة الأقساط - {branch}")
         inst_res = supabase.table("installments").select("*").eq("branch", branch).eq("status", "نشط").execute()
