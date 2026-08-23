@@ -98,15 +98,33 @@ with main_tab:
                 if error or not parsed:
                     response_text = f"⚠️ عذراً، حدث خطأ: {error}"
                 else:
-                    trans_type = parsed.get("type")
+                   trans_type = parsed.get("type")
                     ai_message = parsed.get("message_to_user", "تم الاستلام.")
 
                     if trans_type in ["PURCHASE", "SALE"] and InventoryService:
                         try:
                             success, msg = InventoryService.execute_transaction(branch, parsed, user_input)
-                            response_text = f"{ai_message}\n\n*{msg}*"
+                            response_text = f"{ai_message}\n\n✅ *{msg}*"
                         except Exception as e:
-                            response_text = f"{ai_message}\n\n*⚠️ خطأ في تنفيذ المعاملة بالمخزن: {str(e)}*"
+                            response_text = f"{ai_message}\n\n⚠️ *خطأ في التنفيذ: {str(e)}*"
+                    
+                    elif trans_type == "QUERY" and supabase:
+                        # جلب البيانات الحقيقية من جدول الأقساط بناءً على الاستعلام
+                        customer_query = parsed.get("supplier", "").strip()
+                        try:
+                            q_builder = supabase.table("installments").select("*").eq("branch", branch)
+                            if customer_query and customer_query != "غير محدد":
+                                q_builder = q_builder.ilike("customer_name", f"%{customer_query}%")
+                            
+                            inst_results = q_builder.execute()
+                            if inst_results.data:
+                                response_text = f"📋 **نتائج البحث في الأقساط للفرع ({branch}):**\n\n"
+                                for row in inst_results.data:
+                                    response_text += f"- **العميل:** {row.get('customer_name')} | **الصنف:** {row.get('item_name')} | **المتبقي:** {row.get('remaining_amount')} ج.م | **قيمة القسط:** {row.get('installment_value')} ج.م | **الحالة:** {row.get('status')}\n"
+                            else:
+                                response_text = f"🔍 لم يتم العثور على أقساط مطابقة في قاعدة البيانات بهذا الاسم ({customer_query})."
+                        except Exception as ex:
+                            response_text = f"⚠️ حدث خطأ أثناء الاستعلام من قاعدة البيانات: {str(ex)}"
                     else:
                         response_text = ai_message
 
