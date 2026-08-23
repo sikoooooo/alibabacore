@@ -32,7 +32,6 @@ class InventoryService:
         return normalized.title()
 
     @staticmethod
-    @staticmethod
     def format_stock_display(item_name: str, total_base_qty, units_per_carton: int = 12):
         """
         تنسيق المخزن واستنباط الوحدة الصغرى بدقة (زجاجة، كيس، علبة، قطعة)
@@ -129,6 +128,7 @@ class InventoryService:
                         "description": description, "total_amount": total_amount
                     }).execute()
 
+                    # تحديث التكلفة فقط لو كان القيد الأصلي شراء وتم تسعيره لاحقاً
                     supabase.table("inventory").update({
                         "avg_cost_per_base": unit_price
                     }).eq("branch", branch).eq("item_name", item_name).execute()
@@ -152,15 +152,26 @@ class InventoryService:
                     existing = supabase.table("inventory").select("*").eq("branch", branch).eq("item_name", item_name).execute()
                     if existing.data:
                         current_total = float(existing.data[0].get("total_base_quantity", 0))
-                        new_total = current_total - input_qty if trans_type == "SALE" else current_total + input_qty
+                        current_avg_cost = float(existing.data[0].get("avg_cost_per_base", 0))
+                        
+                        if trans_type == "SALE":
+                            # في حالة البيع: ننقص الكمية فقط، ولا نغير متوسط التكلفة بسعر البيع!
+                            new_total = current_total - input_qty
+                            new_avg_cost = current_avg_cost
+                        else:
+                            # في حالة الشراء: نزيد الكمية ونحدث متوسط التكلفة
+                            new_total = current_total + input_qty
+                            new_avg_cost = unit_price if unit_price > 0 else current_avg_cost
+
                         supabase.table("inventory").update({
                             "total_base_quantity": new_total, 
-                            "avg_cost_per_base": unit_price if unit_price > 0 else existing.data[0].get("avg_cost_per_base", 0)
+                            "avg_cost_per_base": new_avg_cost
                         }).eq("branch", branch).eq("item_name", item_name).execute()
                     else:
                         initial_total = input_qty if trans_type == "PURCHASE" else -input_qty
+                        initial_cost = unit_price if trans_type == "PURCHASE" else 0.0
                         supabase.table("inventory").insert({
-                            "branch": branch, "item_name": item_name, "total_base_quantity": initial_total, "avg_cost_per_base": unit_price
+                            "branch": branch, "item_name": item_name, "total_base_quantity": initial_total, "avg_cost_per_base": initial_cost
                         }).execute()
                         
                     if unit_price == 0:
