@@ -73,7 +73,7 @@ class AIService:
                     break
                     
                 genai.configure(api_key=current_key)
-                model = genai.GenerativeModel('gemini-1.5-flash', generation_config=generation_config)
+                model = genai.GenerativeModel('gemini-3.6-flash', generation_config=generation_config)
                 response = model.generate_content(prompt)
                 
                 return json.loads(response.text.strip())
