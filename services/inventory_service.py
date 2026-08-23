@@ -72,9 +72,23 @@ class InventoryService:
         try:
             trans_type = parsed_data.get("type", "SALE")
             raw_item_name = parsed_data.get("item_name", "غير محدد")
-            
             item_name = cls.normalize_item_name(raw_item_name)
             
+            # استخراج البيانات الجديدة (الماركة، المورد/العميل، والتقسيط)
+            brand = parsed_data.get("brand", "غير محدد")
+            supplier = parsed_data.get("supplier", "غير محدد")
+            is_installment = bool(parsed_data.get("is_installment", False))
+            
+            try:
+                down_payment = float(parsed_data.get("down_payment", 0))
+            except Exception:
+                down_payment = 0.0
+
+            try:
+                installment_value = float(parsed_data.get("installment_value", 0))
+            except Exception:
+                installment_value = 0.0
+
             try:
                 input_qty = float(parsed_data.get("quantity", 1))
             except Exception:
@@ -114,70 +128,133 @@ class InventoryService:
 
                 total_amount = input_qty * unit_price
 
+                # تحديد الوصف الشامل مع الماركة والمورد والتقسيط
+                party_label = "المورد" if trans_type == "PURCHASE" else "العميل"
+                desc_prefix = f"شراء من {supplier}" if trans_type == "PURCHASE" else f"بيع لـ {supplier}"
+                full_description = f"{desc_prefix} - صنف ({item_name}) ماركة ({brand})"
+                if is_installment:
+                    full_description += " [نظام التقسيط]"
+
                 if target_transaction_id:
+                    # تحديث حركة سابقة غير مسعرة
                     supabase.table("transactions").update({
                         "unit_price": unit_price,
                         "total_amount": total_amount,
-                        "raw_text": raw_text
+                        "raw_text": raw_text,
+                        "supplier": supplier,
+                        "brand": brand,
+                        "is_installment": is_installment
                     }).eq("id", target_transaction_id).execute()
 
-                    description = f"تسعير وتحديث قيد {trans_type} للصنف ({item_name})"
                     supabase.table("journal_entries").insert({
-                        "company_id": company_id, "branch_id": branch_id,
-                        "company_name": company_name, "branch_name": branch,
-                        "description": description, "total_amount": total_amount
+                        "company_id": company_id,
+                        "branch_id": branch_id,
+                        "company_name": company_name,
+                        "branch_name": branch,
+                        "description": f"تسعير وتحديث: {full_description}",
+                        "total_amount": total_amount
                     }).execute()
 
-                    # تحديث التكلفة فقط لو كان القيد الأصلي شراء وتم تسعيره لاحقاً
                     supabase.table("inventory").update({
-                        "avg_cost_per_base": unit_price
+                        "avg_cost_per_base": unit_price,
+                        "brand": brand
                     }).eq("branch", branch).eq("item_name", item_name).execute()
 
-                    return True, f"✅ تم تحديث سعر الصنف ({item_name}) للكمية ({input_qty}) وأصبح الإجمالي: {total_amount:,.2f}"
+                    # تسجيل القسط إن وجد
+                    if is_installment:
+                        remaining_amount = total_amount - down_payment
+                        supabase.table("installments").insert({
+                            "branch": branch,
+                            "customer_name": supplier,
+                            "item_name": item_name,
+                            "total_amount": total_amount,
+                            "down_payment": down_payment,
+                            "remaining_amount": remaining_amount,
+                            "installment_value": installment_value,
+                            "status": "نشط"
+                        }).execute()
+
+                    msg = f"✅ تم تحديث سعر الصنف ({item_name}) - ماركة ({brand}) - {party_label}: ({supplier}) - الإجمالي: {total_amount:,.2f}"
+                    if is_installment:
+                        msg += f"\n💳 تم تسجيل قسط بجهة ({supplier}) بمبلغ متبقي ({total_amount - down_payment:,.2f})."
+                    return True, msg
 
                 else:
+                    # إضافة حركة جديدة
                     supabase.table("transactions").insert({
-                        "company_id": company_id, "branch_id": branch_id, "branch": branch,
-                        "type": trans_type, "item_name": item_name, "input_quantity": input_qty,
-                        "unit_price": unit_price, "total_amount": total_amount, "raw_text": raw_text
+                        "company_id": company_id,
+                        "branch_id": branch_id,
+                        "branch": branch,
+                        "type": trans_type,
+                        "item_name": item_name,
+                        "input_quantity": input_qty,
+                        "unit_price": unit_price,
+                        "total_amount": total_amount,
+                        "raw_text": raw_text,
+                        "supplier": supplier,
+                        "brand": brand,
+                        "is_installment": is_installment
                     }).execute()
 
-                    description = f"قيد {trans_type} للصنف ({item_name}) بفرع {branch}"
                     supabase.table("journal_entries").insert({
-                        "company_id": company_id, "branch_id": branch_id,
-                        "company_name": company_name, "branch_name": branch,
-                        "description": description, "total_amount": total_amount
+                        "company_id": company_id,
+                        "branch_id": branch_id,
+                        "company_name": company_name,
+                        "branch_name": branch,
+                        "description": full_description,
+                        "total_amount": total_amount
                     }).execute()
 
+                    # إدراج حركة الأقساط إذا كانت العملية بالتقسيط
+                    if is_installment:
+                        remaining_amount = total_amount - down_payment
+                        supabase.table("installments").insert({
+                            "branch": branch,
+                            "customer_name": supplier,
+                            "item_name": item_name,
+                            "total_amount": total_amount,
+                            "down_payment": down_payment,
+                            "remaining_amount": remaining_amount,
+                            "installment_value": installment_value,
+                            "status": "نشط"
+                        }).execute()
+
+                    # تحديث المخزون
                     existing = supabase.table("inventory").select("*").eq("branch", branch).eq("item_name", item_name).execute()
                     if existing.data:
                         current_total = float(existing.data[0].get("total_base_quantity", 0))
                         current_avg_cost = float(existing.data[0].get("avg_cost_per_base", 0))
                         
                         if trans_type == "SALE":
-                            # في حالة البيع: ننقص الكمية فقط، ولا نغير متوسط التكلفة بسعر البيع!
                             new_total = current_total - input_qty
                             new_avg_cost = current_avg_cost
                         else:
-                            # في حالة الشراء: نزيد الكمية ونحدث متوسط التكلفة
                             new_total = current_total + input_qty
                             new_avg_cost = unit_price if unit_price > 0 else current_avg_cost
 
                         supabase.table("inventory").update({
                             "total_base_quantity": new_total, 
-                            "avg_cost_per_base": new_avg_cost
+                            "avg_cost_per_base": new_avg_cost,
+                            "brand": brand
                         }).eq("branch", branch).eq("item_name", item_name).execute()
                     else:
                         initial_total = input_qty if trans_type == "PURCHASE" else -input_qty
                         initial_cost = unit_price if trans_type == "PURCHASE" else 0.0
                         supabase.table("inventory").insert({
-                            "branch": branch, "item_name": item_name, "total_base_quantity": initial_total, "avg_cost_per_base": initial_cost
+                            "branch": branch,
+                            "item_name": item_name,
+                            "total_base_quantity": initial_total,
+                            "avg_cost_per_base": initial_cost,
+                            "brand": brand
                         }).execute()
                         
                     if unit_price == 0:
-                        return True, f"✅ تم إثبات كمية ({input_qty}) للصنف ({item_name}) في المخزن. يرجى تزويدي بالسعر لاحقاً."
+                        return True, f"✅ تم إثبات كمية ({input_qty}) للصنف ({item_name}) [ماركة: {brand}] في المخزن. يرجى تزويدي بالسعر لاحقاً."
                     else:
-                        return True, f"✅ تم تسجيل العملية بالكامل (كمية: {input_qty}، إجمالي: {total_amount:,.2f})."
+                        msg = f"✅ تم تسجيل العملية بالكامل (الصنف: {item_name} | ماركة: {brand} | {party_label}: {supplier} | الكمية: {input_qty} | إجمالي: {total_amount:,.2f})."
+                        if is_installment:
+                            msg += f"\n💳 تم إدراج قسط جديد بجهة ({supplier}) بمبلغ متبقي ({total_amount - down_payment:,.2f})."
+                        return True, msg
 
             except Exception as cloud_err:
                 sync_manager.save_offline(branch, raw_text, parsed_data)
