@@ -5,6 +5,34 @@ sync_manager = LocalSyncManager()
 
 class InventoryService:
     @staticmethod
+    def normalize_item_name(name: str) -> str:
+        """
+        توحيد مسميات الأصناف لمنع تكرار نفس الصنف بسبب اختلاف طريقة الكتابة
+        (مثلاً: تحويل 'لتر ونصف' أو 'واحد ونصف' إلى '1.5 لتر')
+        """
+        if not name:
+            return "غير محدد"
+        
+        normalized = name.strip().lower()
+        
+        # استبدال الصيغ اللفظية برقم قياسي موحد
+        replacements = {
+            "لتر ونصف": "1.5 لتر",
+            "واحد ونصف لتر": "1.5 لتر",
+            "١.٥ لتر": "1.5 لتر",
+            "نصف لتر": "0.5 لتر",
+            "نص لتر": "0.5 لتر"
+        }
+        
+        for key, val in replacements.items():
+            if key in normalized:
+                # استبدال الجزء اللفظي بالرقم القياسي مع الاحتفاظ بباقي اسم الصنف
+                normalized = normalized.replace(key, val)
+                
+        # إعادة تنسيق الحروف الأولى أو تنظيف المسافات الزائدة
+        return normalized.title()
+
+    @staticmethod
     def format_stock_display(total_base_qty, units_per_carton=12):
         """
         تحويل الكمية الإجمالية إلى مزيج من كراتين ووحدات فردية (مثل: 19 كرتونة و 6 زجاجات)
@@ -32,7 +60,10 @@ class InventoryService:
     def execute_transaction(cls, branch: str, parsed_data: dict, raw_text: str):
         try:
             trans_type = parsed_data.get("type", "SALE")
-            item_name = parsed_data.get("item_name", "غير محدد")
+            raw_item_name = parsed_data.get("item_name", "غير محدد")
+            
+            # 🧠 توحيد اسم الصنف فوراً لمنع الازدواجية
+            item_name = cls.normalize_item_name(raw_item_name)
             
             try:
                 input_qty = float(parsed_data.get("quantity", 1))
@@ -46,7 +77,7 @@ class InventoryService:
 
             company_id, branch_id = db_manager.ensure_default_enterprise_setup(branch)
             if not company_id or not branch_id:
-                return False, "فشل في جلب هيكل الشركة والفرع"
+                return False, "فشل في ج هيكل الشركة والفرع"
 
             company_name = "الشركة الافتراضية العامة"
             try:
@@ -57,7 +88,6 @@ class InventoryService:
                 pass
 
             try:
-                # 🧠 الذكاء المحاسبي: البحث عما إذا كان هناك سجل سابق غير مسعر لهذا الصنف في نفس الفرع لتحديثه
                 target_transaction_id = None
                 if unit_price > 0 and item_name != "غير محدد":
                     unpriced = supabase.table("transactions") \
@@ -70,20 +100,17 @@ class InventoryService:
                         .execute()
                     if unpriced.data:
                         target_transaction_id = unpriced.data[0]["id"]
-                        # وراثة الكمية الصحيحة من السجل القديم غير المسعر
                         input_qty = float(unpriced.data[0]["input_quantity"])
 
                 total_amount = input_qty * unit_price
 
                 if target_transaction_id:
-                    # 🔄 تحديث السجل القديم بدلاً من إنشاء سطر جديد
                     supabase.table("transactions").update({
                         "unit_price": unit_price,
                         "total_amount": total_amount,
                         "raw_text": raw_text
                     }).eq("id", target_transaction_id).execute()
 
-                    # تسجيل قيد محاسبي بالتحديث
                     description = f"تسعير وتحديث قيد {trans_type} للصنف ({item_name})"
                     supabase.table("journal_entries").insert({
                         "company_id": company_id, "branch_id": branch_id,
@@ -91,7 +118,6 @@ class InventoryService:
                         "description": description, "total_amount": total_amount
                     }).execute()
 
-                    # تحديث متوسط التكلفة في المخزن
                     supabase.table("inventory").update({
                         "avg_cost_per_base": unit_price
                     }).eq("branch", branch).eq("item_name", item_name).execute()
@@ -99,7 +125,6 @@ class InventoryService:
                     return True, f"✅ تم تحديث سعر الصنف ({item_name}) للكمية ({input_qty}) وأصبح الإجمالي: {total_amount:,.2f}"
 
                 else:
-                    # ➕ إدراج حركة جديدة كالعادة إذا كانت كاملة أو مسعرة من البداية
                     supabase.table("transactions").insert({
                         "company_id": company_id, "branch_id": branch_id, "branch": branch,
                         "type": trans_type, "item_name": item_name, "input_quantity": input_qty,
@@ -113,7 +138,6 @@ class InventoryService:
                         "description": description, "total_amount": total_amount
                     }).execute()
 
-                    # تحديث المخزن
                     existing = supabase.table("inventory").select("*").eq("branch", branch).eq("item_name", item_name).execute()
                     if existing.data:
                         current_total = float(existing.data[0].get("total_base_quantity", 0))
