@@ -5,7 +5,31 @@ sync_manager = LocalSyncManager()
 
 class InventoryService:
     @staticmethod
-    def execute_transaction(branch: str, parsed_data: dict, raw_text: str):
+    def format_stock_display(total_base_qty, units_per_carton=12):
+        """
+        تحويل الكمية الإجمالية إلى مزيج من كراتين ووحدات فردية (مثل: 19 كرتونة و 6 زجاجات)
+        """
+        try:
+            qty = float(total_base_qty)
+        except (TypeError, ValueError):
+            return f"{total_base_qty} وحدة"
+        
+        if units_per_carton <= 1:
+            return f"{qty:g} وحدة"
+            
+        cartons = int(qty // units_per_carton)
+        pieces = int(qty % units_per_carton)
+        
+        result_parts = []
+        if cartons > 0:
+            result_parts.append(f"{cartons} كرتونة")
+        if pieces > 0 or cartons == 0:
+            result_parts.append(f"{pieces} زجاجة")
+            
+        return " و ".join(result_parts)
+
+    @classmethod
+    def execute_transaction(cls, branch: str, parsed_data: dict, raw_text: str):
         try:
             trans_type = parsed_data.get("type", "SALE")
             item_name = parsed_data.get("item_name", "غير محدد")
@@ -96,7 +120,7 @@ class InventoryService:
                         new_total = current_total - input_qty if trans_type == "SALE" else current_total + input_qty
                         supabase.table("inventory").update({
                             "total_base_quantity": new_total, 
-                            "avg_cost_pet_base" if "avg_cost_pet_base" in existing.data[0] else "avg_cost_per_base": unit_price if unit_price > 0 else existing.data[0].get("avg_cost_per_base", 0)
+                            "avg_cost_per_base": unit_price if unit_price > 0 else existing.data[0].get("avg_cost_per_base", 0)
                         }).eq("branch", branch).eq("item_name", item_name).execute()
                     else:
                         initial_total = input_qty if trans_type == "PURCHASE" else -input_qty
