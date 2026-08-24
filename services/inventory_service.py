@@ -4,7 +4,6 @@ from datetime import datetime
 class InventoryService:
     @staticmethod
     def convert_to_base_unit(branch: str, item_name: str, quantity: float, unit: str):
-        # 1. دالة تحويل الوحدات الكبرى إلى صغرى
         try:
             inv_res = supabase.table("inventory").select("conversion_factor, minor_unit, major_unit").eq("branch", branch).eq("item_name", item_name).execute()
             if inv_res.data:
@@ -16,7 +15,6 @@ class InventoryService:
                     return quantity * conversion_factor, f"تم التحويل من {major_unit} إلى الوحدة الصغرى بمعامل {conversion_factor}"
         except Exception as e:
             print(f"Unit conversion error: {e}")
-        
         return quantity, ""
 
     @staticmethod
@@ -27,12 +25,40 @@ class InventoryService:
                 return False, "فشل إعداد الشركة أو الفرع."
 
             trans_type = parsed.get("type")
+            unit_price = float(parsed.get("unit_price", 0.0))
+
+            # ==============================================================
+            # 🛠️ ميزة مرونة المدخلات: تحديث السعر لمعاملة سابقة (بدون تكرار)
+            # ==============================================================
+            if trans_type == "UPDATE_PRICE":
+                recent_trans = supabase.table("transactions").select("*").eq("branch", branch).order("created_at", desc=True).limit(1).execute()
+                if not recent_trans.data:
+                    return False, "لم يتم العثور على معاملة سابقة لتحديث سعرها."
+                
+                last_record = recent_trans.data[0]
+                record_id = last_record["id"]
+                old_qty = float(last_record["quantity"])
+                item_name = last_record["item_name"]
+                
+                new_total = old_qty * unit_price
+                
+                # تحديث الترانساكشن
+                supabase.table("transactions").update({"unit_price": unit_price, "total_amount": new_total}).eq("id", record_id).execute()
+                
+                # تحديث دفتر اليومية
+                recent_journal = supabase.table("journal_entries").select("*").eq("branch_name", branch).ilike("description", f"%{item_name}%").order("created_at", desc=True).limit(1).execute()
+                if recent_journal.data:
+                    j_id = recent_journal.data[0]["id"]
+                    supabase.table("journal_entries").update({"amount": new_total}).eq("id", j_id).execute()
+                    
+                return True, f"تم تعديل سعر {item_name} بنجاح! الإجمالي الجديد: {new_total:,.2f} ج.م (تم التحديث بدون تكرار المخزون) 🛠️"
+            # ==============================================================
+
             item_name = parsed.get("item_name", "غير محدد")
             brand = parsed.get("brand", "غير محدد")
             supplier = parsed.get("supplier", "غير محدد")
             quantity = float(parsed.get("quantity", 1.0))
             unit = parsed.get("unit", "وحدة")
-            unit_price = float(parsed.get("unit_price", 0.0))
             total_amount = quantity * unit_price
             
             is_installment = parsed.get("is_installment", False)
@@ -40,7 +66,6 @@ class InventoryService:
             installment_value = float(parsed.get("installment_value", 0.0))
             due_date = parsed.get("due_date", "غير محدد")
 
-            # 2. تطبيق التحويل للكمية
             adjusted_quantity, conversion_msg = InventoryService.convert_to_base_unit(branch, item_name, quantity, unit)
 
             trans_data = {
@@ -106,7 +131,7 @@ class InventoryService:
                 }
                 supabase.table("installments").insert(inst_data).execute()
 
-            success_msg = f"تم الحفظ! (الإجمالي: {total_amount:,.2f} ج.م)"
+            success_msg = f"تم الحفظ مبدئياً! (الإجمالي: {total_amount:,.2f} ج.م)" if total_amount == 0 else f"تم الحفظ بنجاح! (الإجمالي: {total_amount:,.2f} ج.م)"
             if conversion_msg:
                 success_msg += f"\n📦 *{conversion_msg}*"
             return True, success_msg
