@@ -14,12 +14,17 @@ if st and hasattr(st, "secrets") and st.secrets:
             if val not in api_keys:
                 api_keys.append(val)
 
+env_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+if env_key and env_key not in api_keys:
+    api_keys.append(env_key)
+
 if not api_keys:
     api_keys = [""]
 
 class AIService:
     current_key_index = 0
 
+    # 🟢 بداية الدالة: smart_process_command (معالجة النص والذاكرة وتحويل الـ JSON)
     @classmethod
     def smart_process_command(cls, user_text: str, branch: str, branch_rules: list = None, chat_history: list = None):
         if chat_history is None: 
@@ -27,7 +32,7 @@ class AIService:
         if branch_rules is None:
             branch_rules = []
         
-        # 1. تجهيز الذاكرة القصيرة لدمجها داخل الـ Prompt
+        # تجهيز الذاكرة القصيرة (آخر 4 رسائل)
         history_context = "\n".join([f"- {m['role']}: {m['content']}" for m in chat_history[-4:]]) if chat_history else "لا يوجد سياق سابق."
         
         prompt = f"""
@@ -43,8 +48,9 @@ class AIService:
         1. الذاكرة والسياق: إذا كان الكلام استكمالاً لمعاملة سابقة (مثل تحديد سعر)، اربطه بالصنف والكمية في السياق السابق.
         2. الكمية والوحدة: استخرج الكمية والوحدة كما ذكرها التاجر بدقة.
         3. التقسيط: إذا كانت العملية تقسيط أو آجل، اجعل `is_installment` تساوي true واستخرج المقدم (`down_payment`) وقيمة القسط (`installment_value`) وتاريخ الاستحقاق (`due_date`).
+        4. لا تستخدم أي علامات تنصيص مزدوجة داخل قيم النصوص المرجعة لتجنب تلف الـ JSON.
 
-        نسق المخرجات داخل هيكل JSON التالي حصرياً:
+        نسق المخرجات داخل هيكل JSON التالي حصرياً وبدون أي أوسمة إضافية:
         {{
             "type": "PURCHASE" | "SALE" | "QUERY" | "INCOMPLETE",
             "item_name": "اسم الصنف",
@@ -77,10 +83,21 @@ class AIService:
                     break
                     
                 genai.configure(api_key=current_key)
-                model = genai.GenerativeModel('gemini-3.6-flash', generation_config=generation_config)
+                model = genai.GenerativeModel('gemini-1.5-flash', generation_config=generation_config)
                 response = model.generate_content(prompt)
                 
-                return json.loads(response.text.strip())
+                raw_text = response.text.strip()
+                
+                # فلترة وتنظيف نصوص الماركداون المتبقية لضمان سلامة الـ JSON
+                if raw_text.startswith("```"):
+                    lines = raw_text.splitlines()
+                    if lines[0].startswith("```"):
+                        lines = lines[1:]
+                    if lines and lines[-1].startswith("```"):
+                        lines = lines[:-1]
+                    raw_text = "\n".join(lines).strip()
+
+                return json.loads(raw_text)
             except Exception as e:
                 last_error_msg = str(e)
                 cls.current_key_index = (cls.current_key_index + 1) % len(api_keys)
@@ -100,3 +117,4 @@ class AIService:
             "due_date": "غير محدد",
             "message_to_user": f"⚠️ خطأ في المعالجة: {last_error_msg}"
         }
+    # 🔴 نهاية الدالة: smart_process_command
