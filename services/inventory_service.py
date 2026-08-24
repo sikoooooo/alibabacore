@@ -1,32 +1,47 @@
 from core.database import supabase, db_manager
 from datetime import datetime
 
+# 🟢 قاموس بديهيات أعراف السوق (تطبق تلقائياً إذا لم توجد قاعدة سابقة)
+DEFAULT_CONVERSIONS = {
+    "كرتونة": {"factor": 12.0, "minor": "زجاجة"},
+    "دسته": {"factor": 12.0, "minor": "قطعة"},
+    "دستة": {"factor": 12.0, "minor": "قطعة"},
+    "طقم": {"factor": 4.0, "minor": "فردة"},
+    "ربطة": {"factor": 10.0, "minor": "كيس"},
+    "شيكارة": {"factor": 50.0, "minor": "كيلو"},
+    "شوال": {"factor": 50.0, "minor": "كيلو"},
+    "باكتة": {"factor": 10.0, "minor": "علبة"},
+    "توب": {"factor": 30.0, "minor": "متر"},
+    "زوج": {"factor": 2.0, "minor": "قطعة"},
+    "جوز": {"factor": 2.0, "minor": "قطعة"}
+}
+
 class InventoryService:
 
-    # 🟢 بداية الدالة: convert_to_base_unit (تحويل الكميات وقراءة تفضيلات جدول item_units)
+    # 🟢 بداية الدالة: convert_to_base_unit (تحويل الكميات وقراءة تفضيلات جدول item_units والبديهيات)
     @staticmethod
     def convert_to_base_unit(branch: str, item_name: str, quantity: float, unit: str, parsed: dict = None):
         """
         تحويل الكمية المدخلة للوحدة الصغرى بالاعتماد على الهرمية:
-        الرسالة اللحظية -> جدول item_units (مطابقة رباعية ثم ثنائية) -> جدول المخزون.
+        الرسالة اللحظية -> جدول item_units (مطابقة رباعية ثم ثنائية) -> جدول المخزون -> بديهيات السوق.
         """
         parsed = parsed or {}
         conv_factor = float(parsed.get("conversion_factor") or 1.0)
-        major_u = parsed.get("major_unit") or "كرتونة"
+        major_u = parsed.get("major_unit") or unit or "كرتونة"
         minor_u = parsed.get("minor_unit") or "قطعة"
         brand = parsed.get("brand", "غير محدد")
         supplier = parsed.get("supplier", "غير محدد")
 
         try:
-            # 1. إذا لم يُذكر معامل تحويل صريح (> 1) في الرسالة، ابحث في جدول item_units
+            # 1. إذا لم يُذكر معامل تحويل صريح (> 1) في الرسالة، ابحث في الهرمية
             if conv_factor <= 1.0:
-                # مطابقة رباعية: (الفرع + الصنف + الماركة + المورد)
+                # أ. مطابقة رباعية: (الفرع + الصنف + الماركة + المورد)
                 units_res = supabase.table("item_units").select("conversion_factor, major_unit, minor_unit")\
                     .eq("branch", branch).ilike("item_name", item_name)\
                     .ilike("brand", brand).ilike("supplier", supplier).execute()
                 
                 if not units_res.data:
-                    # مطابقة ثنائية: (الفرع + الصنف)
+                    # ب. مطابقة ثنائية: (الفرع + الصنف)
                     units_res = supabase.table("item_units").select("conversion_factor, major_unit, minor_unit")\
                         .eq("branch", branch).ilike("item_name", item_name).execute()
 
@@ -36,14 +51,24 @@ class InventoryService:
                     major_u = row.get("major_unit") or major_u
                     minor_u = row.get("minor_unit") or minor_u
                 else:
-                    # البحث في جدول المخزون كبديل
+                    # ج. البحث في جدول المخزون كبديل
                     inv_res = supabase.table("inventory").select("conversion_factor, minor_unit, major_unit")\
                         .eq("branch", branch).ilike("item_name", item_name).execute()
-                    if inv_res.data:
+                    
+                    if inv_res.data and float(inv_res.data[0].get("conversion_factor") or 1.0) > 1.0:
                         row = inv_res.data[0]
                         conv_factor = float(row.get("conversion_factor") or 1.0)
                         major_u = row.get("major_unit") or major_u
                         minor_u = row.get("minor_unit") or minor_u
+                    else:
+                        # د. تطبيق البديهيات العامة كخط دفاع أخير
+                        unit_clean = unit.strip().lower()
+                        if unit_clean in DEFAULT_CONVERSIONS:
+                            default_info = DEFAULT_CONVERSIONS[unit_clean]
+                            conv_factor = default_info["factor"]
+                            major_u = unit
+                            if minor_u in ["قطعة", "وحدة", "غير محدد"]:
+                                minor_u = default_info["minor"]
 
             # 2. إجراء التحويل للوحدة الصغرى إذا كانت الوحدة كبرى
             if conv_factor > 1.0:
@@ -131,7 +156,7 @@ class InventoryService:
                     total_str = f"{int(total_qty)}" if total_qty.is_integer() else f"{total_qty:.1f}"
                     response_lines.append(f"- **{name}:** {formatted_qty} *(إجمالي: {total_str} {minor_unit})*")
                 else:
-                    total_str = f"{int(total_qty)}" if total_str := total_qty:
+                    total_str = f"{int(total_qty)}" if total_qty.is_integer() else f"{total_qty:.1f}"
                     unit = row.get("unit") or minor_unit
                     response_lines.append(f"- **{name}:** {total_str} {unit}")
 
@@ -159,12 +184,12 @@ class InventoryService:
             unit = parsed.get("unit", "وحدة")
             unit_price = float(parsed.get("unit_price", 0.0))
 
-            # 1. تحويل الكمية إلى الوحدة الصغرى بالاعتماد على الهرمية وتفضيلات item_units
+            # 1. تحويل الكمية إلى الوحدة الصغرى بالاعتماد على الهرمية وتفضيلات item_units وبديهيات السوق
             base_quantity, conversion_note, conv_factor, major_unit, minor_unit = InventoryService.convert_to_base_unit(
                 branch, item_name, raw_quantity, unit, parsed
             )
 
-            # 2. حفظ تفضيل الوحدة في جدول item_units تلقائياً للتعاملات القادمة
+            # 2. حفظ تفضيل الوحدة في جدول item_units تلقائياً للتعاملات القادمة (حتى لو جاءت من بديهية)
             if conv_factor > 1.0:
                 InventoryService.save_item_unit_preference(
                     branch, item_name, brand, supplier, major_unit, minor_unit, conv_factor
