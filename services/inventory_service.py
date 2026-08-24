@@ -96,7 +96,7 @@ class InventoryService:
         تنفيذ المبيعات والمشتريات وتحديث المخزون ودعم الأسعار المعلقة والتحديث اللاحق.
         """
         try:
-            company_id, branch_id = db_manager.ensure_default enterprise_setup(branch) if hasattr(db_manager, 'ensure_default_enterprise_setup') else (None, None)
+            company_id, branch_id = db_manager.ensure_default_enterprise_setup(branch) if hasattr(db_manager, 'ensure_default_enterprise_setup') else (None, None)
             trans_type = parsed.get("type", "PURCHASE")
             item_name = parsed.get("item_name", "غير محدد").strip()
             brand = parsed.get("brand", "غير محدد")
