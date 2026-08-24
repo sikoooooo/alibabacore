@@ -17,7 +17,6 @@ class AIService:
         if branch_rules is None:
             branch_rules = []
         
-        # 1. تفعيل الذاكرة القصيرة: دمج آخر 6 رسائل لربط السياق
         history_text = ""
         if chat_history:
             for msg in chat_history[-6:]:
@@ -25,22 +24,23 @@ class AIService:
                 history_text += f"{role}: {msg['content']}\n"
 
         prompt = f"""
-        أنت المحاسب الذكي لنظام ERP. حلل كلام التاجر بالاعتماد التام على "سياق المحادثة السابقة" إذا كانت الرسالة الحالية تكملة (مثل تحديد سعر، كمية، أو عميل لصنف تم ذكره سابقاً).
+        أنت المحاسب الذكي لنظام ERP (وضع Pro Extended). حلل كلام التاجر بالاعتماد التام على "سياق المحادثة".
         
         قواعد الفرع: {branch_rules}
-
-        سياق المحادثة السابقة (الذاكرة):
+        سياق المحادثة:
         {history_text}
-
+        
         الرسالة الحالية: "{user_text}"
 
-        🧠 قواعد الفهم:
-        1. إذا كانت الرسالة تكملة (مثل: "السعر 1000")، اربطها بالمعاملة السابقة واستخرج البيانات كاملة كعملية PURCHASE أو SALE.
-        2. للاستعلام عن أقساط أو ديون، اجعل `type` "QUERY" واستخرج `supplier` و `due_date`.
+        🧠 قواعد صارمة:
+        1. مرونة المدخلات (تحديث السعر): إذا كانت الرسالة استكمالاً لمعاملة سابقة تم إدخالها للتو وكانت تنقصها قيمة السعر (مثل: "السعر 500" أو "الكرتونة ب 1000")، اجعل `type` = "UPDATE_PRICE" واستخرج `unit_price` فقط.
+        2. المعاملات الجديدة: إذا كانت المعاملة شراء أو بيع كاملة أو مبدئية بدون سعر، اجعل `type` = "PURCHASE" أو "SALE". لا بأس بتسجيلها بقيمة 0 مبدئياً حتى يقوم التاجر بتحديثها.
+        3. الأقساط (مهم جداً): إذا كانت المعاملة تقسيط (مقدم وباقي)، اجعل `is_installment` = true، واستخرج `installment_value` (قيمة القسط)، واستخرج `due_date` (تاريخ وموعد الاستحقاق بدقة كما قاله التاجر، مثلاً "أول كل شهر" أو "كل يوم خميس").
+        4. الاستعلام: للاستعلام عن أقساط أو ديون، اجعل `type` = "QUERY".
 
         نسق المخرجات داخل JSON التالي حصرياً:
         {{
-            "type": "PURCHASE" | "SALE" | "QUERY" | "INCOMPLETE",
+            "type": "PURCHASE" | "SALE" | "UPDATE_PRICE" | "QUERY" | "INCOMPLETE",
             "item_name": "اسم الصنف أو غير محدد",
             "brand": "غير محدد",
             "supplier": "اسم المورد/العميل أو غير محدد",
@@ -50,8 +50,8 @@ class AIService:
             "is_installment": false,
             "down_payment": 0.0,
             "installment_value": 0.0,
-            "due_date": "تاريخ الاستحقاق أو غير محدد",
-            "message_to_user": "رد توضيحي للتاجر"
+            "due_date": "غير محدد",
+            "message_to_user": "رد احترافي"
         }}
         """
         
@@ -79,7 +79,6 @@ class AIService:
                     break
                     
                 genai.configure(api_key=current_key)
-                # 2. الموديل الثابت (لا يتغير أبداً)
                 model = genai.GenerativeModel('gemini-3.5-flash-lite')
                 response = model.generate_content(prompt)
                 
