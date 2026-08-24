@@ -24,7 +24,7 @@ if not api_keys:
 class AIService:
     current_key_index = 0
 
-    # 🟢 بداية الدالة: smart_process_command (معالجة النص والذاكرة - موديل gemini-3.5-flash-lite)
+    # 🟢 بداية الدالة: smart_process_command (معالجة النص، الذاكرة، وحقول تحويل الوحدات)
     @classmethod
     def smart_process_command(cls, user_text: str, branch: str, branch_rules: list = None, chat_history: list = None):
         if chat_history is None: 
@@ -46,9 +46,13 @@ class AIService:
 
         🧠 قواعد الفهم (إجباري):
         1. الذاكرة والسياق: إذا كان الكلام استكمالاً لمعاملة سابقة (مثل تحديد سعر)، اربطه بالصنف والكمية في السياق السابق.
-        2. الكمية والوحدة: استخرج الكمية والوحدة كما ذكرها التاجر بدقة.
-        3. التقسيط: إذا كانت العملية تقسيط أو آجل، اجعل `is_installment` تساوي true واستخرج المقدم (`down_payment`) وقيمة القسط (`installment_value`) وتاريخ الاستحقاق (`due_date`).
-        4. لا تستخدم أي علامات تنصيص مزدوجة داخل قيم النصوص المرجعة لتجنب تلف الـ JSON.
+        2. الكمية والوحدة: استخرج الكمية والوحدة التي أذكرها التاجر بدقة (مثلاً: 10 كرتونة).
+        3. تحويل الوحدات: إذا ذكر التاجر تعبئة الكرتونة أو العلبة (مثال: "الكرتونة 20 كيس")، استخرج:
+           - `major_unit`: الوحدة الكبرى ("كرتونة").
+           - `minor_unit`: الوحدة الصغرى ("كيس" أو "قطعة").
+           - `conversion_factor`: معامل التحويل المذكور (مثلاً 20.0). إذا لم يذكر اجعله 1.0.
+        4. التقسيط: إذا كانت العملية تقسيط أو آجل، اجعل `is_installment` تساوي true واستخرج المقدم (`down_payment`) وقيمة القسط (`installment_value`) وتاريخ الاستحقاق (`due_date`).
+        5. لا تستخدم أي علامات تنصيص مزدوجة داخل قيم النصوص المرجعة لتجنب تلف الـ JSON.
 
         نسق المخرجات داخل هيكل JSON التالي حصرياً وبدون أي أوسمة إضافية:
         {{
@@ -58,6 +62,9 @@ class AIService:
             "supplier": "اسم المورد/العميل أو غير محدد",
             "quantity": 1.0,
             "unit": "وحدة",
+            "major_unit": "الوحدة الكبرى أو غير محدد",
+            "minor_unit": "الوحدة الصغرى أو غير محدد",
+            "conversion_factor": 1.0,
             "unit_price": 0.0,
             "is_installment": false,
             "down_payment": 0.0,
@@ -112,6 +119,9 @@ class AIService:
             "supplier": "غير محدد",
             "quantity": 1.0,
             "unit": "وحدة",
+            "major_unit": "غير محدد",
+            "minor_unit": "غير محدد",
+            "conversion_factor": 1.0,
             "unit_price": 0.0,
             "is_installment": False,
             "down_payment": 0.0,
