@@ -1,6 +1,17 @@
 from core.database import supabase, db_manager
 from datetime import datetime
 
+# 🟢 دالة توحيد وتنظيف النصوص العربية (لإزالة الفروق بين ة / ه والتعريف والمسافات)
+def normalize_arabic(text: str) -> str:
+    if not text:
+        return ""
+    t = text.strip().lower()
+    if t.startswith("ال"):
+        t = t[2:]
+    if t.endswith("ه"):
+        t = t[:-1] + "ة"
+    return t
+
 # 🟢 قاموس بديهيات أعراف السوق (تطبق تلقائياً إذا لم توجد قاعدة سابقة)
 DEFAULT_CONVERSIONS = {
     "كرتونة": {"factor": 12.0, "minor": "زجاجة"},
@@ -23,7 +34,7 @@ class InventoryService:
     def convert_to_base_unit(branch: str, item_name: str, quantity: float, unit: str, parsed: dict = None):
         """
         تحويل الكمية المدخلة للوحدة الصغرى بالاعتماد على الهرمية:
-        الرسالة اللحظية -> جدول item_units (مطابقة رباعية ثم ثنائية) -> جدول المخزون -> بديهيات السوق.
+        الرسالة اللحظية -> جدول item_units -> جدول المخزون -> بديهيات السوق (مطابقة باحتواء وحروف موحدة).
         """
         parsed = parsed or {}
         conv_factor = float(parsed.get("conversion_factor") or 1.0)
@@ -61,20 +72,25 @@ class InventoryService:
                         major_u = row.get("major_unit") or major_u
                         minor_u = row.get("minor_unit") or minor_u
                     else:
-                        # د. تطبيق البديهيات العامة كخط دفاع أخير
-                        unit_clean = unit.strip().lower()
-                        if unit_clean in DEFAULT_CONVERSIONS:
-                            default_info = DEFAULT_CONVERSIONS[unit_clean]
-                            conv_factor = default_info["factor"]
-                            major_u = unit
-                            if minor_u in ["قطعة", "وحدة", "غير محدد"]:
-                                minor_u = default_info["minor"]
+                        # د. تطبيق البديهيات العامة مع التوحيد والبحث بالاحتواء Substring Matching
+                        unit_clean = normalize_arabic(unit)
+                        major_clean = normalize_arabic(major_u)
+                        search_text = f"{unit_clean} {major_clean}"
+
+                        for keyword, default_info in DEFAULT_CONVERSIONS.items():
+                            keyword_clean = normalize_arabic(keyword)
+                            if keyword_clean in search_text:
+                                conv_factor = default_info["factor"]
+                                major_u = unit if unit else major_u
+                                if minor_u in ["قطعة", "وحدة", "غير محدد"]:
+                                    minor_u = default_info["minor"]
+                                break
 
             # 2. إجراء التحويل للوحدة الصغرى إذا كانت الوحدة كبرى
             if conv_factor > 1.0:
-                unit_clean = unit.strip().lower()
-                major_clean = major_u.strip().lower()
-                minor_clean = minor_u.strip().lower()
+                unit_clean = normalize_arabic(unit)
+                major_clean = normalize_arabic(major_u)
+                minor_clean = normalize_arabic(minor_u)
 
                 if unit_clean == major_clean or (unit_clean != minor_clean and conv_factor > 1):
                     base_qty = quantity * conv_factor
