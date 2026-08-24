@@ -1,4 +1,30 @@
-# 🟢 بداية الدالة: smart_process_command (تطبيق موديل gemini-3.5-flash-lite)
+import json
+import os
+try:
+    import streamlit as st
+except ImportError:
+    st = None
+
+import google.generativeai as genai
+
+api_keys = []
+if st and hasattr(st, "secrets") and st.secrets:
+    for secret_key, val in st.secrets.items():
+        if val and isinstance(val, str) and (val.startswith("AIza") or val.startswith("AQ.") or len(val) > 20):
+            if val not in api_keys:
+                api_keys.append(val)
+
+env_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+if env_key and env_key not in api_keys:
+    api_keys.append(env_key)
+
+if not api_keys:
+    api_keys = [""]
+
+class AIService:
+    current_key_index = 0
+
+    # 🟢 بداية الدالة: smart_process_command (معالجة النص والذاكرة - موديل gemini-3.5-flash-lite)
     @classmethod
     def smart_process_command(cls, user_text: str, branch: str, branch_rules: list = None, chat_history: list = None):
         if chat_history is None: 
