@@ -29,12 +29,11 @@ DEFAULT_CONVERSIONS = {
 
 class InventoryService:
 
-    # 🟢 بداية الدالة: convert_to_base_unit (تحويل الكميات وقراءة تفضيلات جدول item_units والبديهيات)
+    # 🟢 بداية الدالة: convert_to_base_unit 
     @staticmethod
     def convert_to_base_unit(branch: str, item_name: str, quantity: float, unit: str, parsed: dict = None):
         """
-        تحويل الكمية المدخلة للوحدة الصغرى بالاعتماد على الهرمية:
-        الرسالة اللحظية -> جدول item_units -> جدول المخزون -> بديهيات السوق (مطابقة باحتواء وحروف موحدة).
+        تحويل الكمية المدخلة للوحدة الصغرى بالاعتماد على الهرمية وتتبع مصدر التحويل لتطبيق مبدأ العزل.
         """
         parsed = parsed or {}
         conv_factor = float(parsed.get("conversion_factor") or 1.0)
@@ -42,10 +41,14 @@ class InventoryService:
         minor_u = parsed.get("minor_unit") or "قطعة"
         brand = parsed.get("brand", "غير محدد")
         supplier = parsed.get("supplier", "غير محدد")
+        
+        # متغير تتبع المصدر لضمان عدم حفظ البديهيات في item_units
+        source = "none" 
 
         try:
-            # 1. إذا لم يُذكر معامل تحويل صريح (> 1) في الرسالة، ابحث في الهرمية
-            if conv_factor <= 1.0:
+            if conv_factor > 1.0:
+                source = "parsed"
+            else:
                 # أ. مطابقة رباعية: (الفرع + الصنف + الماركة + المورد)
                 units_res = supabase.table("item_units").select("conversion_factor, major_unit, minor_unit")\
                     .eq("branch", branch).ilike("item_name", item_name)\
@@ -61,6 +64,7 @@ class InventoryService:
                     conv_factor = float(row.get("conversion_factor") or 1.0)
                     major_u = row.get("major_unit") or major_u
                     minor_u = row.get("minor_unit") or minor_u
+                    source = "item_units"
                 else:
                     # ج. البحث في جدول المخزون كبديل
                     inv_res = supabase.table("inventory").select("conversion_factor, minor_unit, major_unit")\
@@ -71,6 +75,7 @@ class InventoryService:
                         conv_factor = float(row.get("conversion_factor") or 1.0)
                         major_u = row.get("major_unit") or major_u
                         minor_u = row.get("minor_unit") or minor_u
+                        source = "inventory"
                     else:
                         # د. تطبيق البديهيات العامة مع التوحيد والبحث بالاحتواء Substring Matching
                         unit_clean = normalize_arabic(unit)
@@ -84,9 +89,10 @@ class InventoryService:
                                 major_u = unit if unit else major_u
                                 if minor_u in ["قطعة", "وحدة", "غير محدد"]:
                                     minor_u = default_info["minor"]
+                                source = "default"
                                 break
 
-            # 2. إجراء التحويل للوحدة الصغرى إذا كانت الوحدة كبرى
+            # إجراء التحويل للوحدة الصغرى إذا كانت الوحدة كبرى
             if conv_factor > 1.0:
                 unit_clean = normalize_arabic(unit)
                 major_clean = normalize_arabic(major_u)
@@ -94,15 +100,16 @@ class InventoryService:
 
                 if unit_clean == major_clean or (unit_clean != minor_clean and conv_factor > 1):
                     base_qty = quantity * conv_factor
-                    return base_qty, f"تم تحويل {quantity} {unit} إلى {base_qty} {minor_u}", conv_factor, major_u, minor_u
+                    return base_qty, f"تم تحويل {quantity} {unit} إلى {base_qty} {minor_u}", conv_factor, major_u, minor_u, source
+
         except Exception as e:
             print(f"Unit conversion error: {e}")
         
-        return quantity, "", conv_factor, major_u, minor_u
+        return quantity, "", conv_factor, major_u, minor_u, source
     # 🔴 نهاية الدالة: convert_to_base_unit
 
 
-    # 🟢 بداية الدالة: save_item_unit_preference (حفظ وتحديث التفضيل الذكي في item_units)
+    # 🟢 بداية الدالة: save_item_unit_preference
     @staticmethod
     def save_item_unit_preference(branch: str, item_name: str, brand: str, supplier: str, major_unit: str, minor_unit: str, conversion_factor: float):
         """
@@ -134,7 +141,7 @@ class InventoryService:
     # 🔴 نهاية الدالة: save_item_unit_preference
 
 
-    # 🟢 بداية الدالة: query_inventory (عرض المخزون بالرصيد المزدوج)
+    # 🟢 بداية الدالة: query_inventory
     @staticmethod
     def query_inventory(branch: str, item_name: str = None):
         """
@@ -183,7 +190,7 @@ class InventoryService:
     # 🔴 نهاية الدالة: query_inventory
 
 
-    # 🟢 بداية الدالة: execute_transaction (تنفيذ المعاملات وتسوية الأسعار وتحديث تفضيلات الوحدات)
+    # 🟢 بداية الدالة: execute_transaction
     @staticmethod
     def execute_transaction(branch: str, parsed: dict, user_text: str):
         """
@@ -200,13 +207,14 @@ class InventoryService:
             unit = parsed.get("unit", "وحدة")
             unit_price = float(parsed.get("unit_price", 0.0))
 
-            # 1. تحويل الكمية إلى الوحدة الصغرى بالاعتماد على الهرمية وتفضيلات item_units وبديهيات السوق
-            base_quantity, conversion_note, conv_factor, major_unit, minor_unit = InventoryService.convert_to_base_unit(
+            # 1. تحويل الكمية إلى الوحدة الصغرى واستقبال متغير تتبع المصدر (source)
+            base_quantity, conversion_note, conv_factor, major_unit, minor_unit, source = InventoryService.convert_to_base_unit(
                 branch, item_name, raw_quantity, unit, parsed
             )
 
-            # 2. حفظ تفضيل الوحدة في جدول item_units تلقائياً للتعاملات القادمة (حتى لو جاءت من بديهية)
-            if conv_factor > 1.0:
+            # 2. حفظ تفضيل الوحدة في جدول item_units للتعاملات القادمة
+            # (تطبيق العزل: الحفظ يتم فقط إذا كان المصدر هو الرسالة/الذكاء الاصطناعي مباشرة)
+            if source == "parsed" and conv_factor > 1.0:
                 InventoryService.save_item_unit_preference(
                     branch, item_name, brand, supplier, major_unit, minor_unit, conv_factor
                 )
@@ -279,7 +287,7 @@ class InventoryService:
                 }
                 supabase.table("journal_entries").insert(journal_data).execute()
 
-            # 7. تحديث جدول المخزون
+            # 7. تحديث جدول المخزون (تأثير البديهيات يظهر هنا فقط ولا يتخطاه)
             inv_query = supabase.table("inventory").select("*").eq("branch", branch).ilike("item_name", item_name).execute()
             
             if inv_query.data:
