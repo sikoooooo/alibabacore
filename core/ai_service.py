@@ -24,7 +24,7 @@ if not api_keys:
 class AIService:
     current_key_index = 0
 
-    # 🟢 بداية الدالة: smart_process_command (معالجة النص، الذاكرة، وحقول تحويل الوحدات)
+    # 🟢 بداية الدالة: smart_process_command (المرحلة الأولى: حظر هلوسة الأسعار + استخراج معامل التحويل والوحدات)
     @classmethod
     def smart_process_command(cls, user_text: str, branch: str, branch_rules: list = None, chat_history: list = None):
         if chat_history is None: 
@@ -36,7 +36,7 @@ class AIService:
         history_context = "\n".join([f"- {m['role']}: {m['content']}" for m in chat_history[-4:]]) if chat_history else "لا يوجد سياق سابق."
         
         prompt = f"""
-        أنت المحاسب الذكي لنظام ERP. حلل كلام التاجر واستخرج بيانات المعاملة بالاعتماد على سياق المحادثة السابقة إذا كانت الرسالة استكمالاً لطلب سابق.
+        أنت المحاسب الذكي لنظام ERP. حلل كلام التاجر واستخرج بيانات المعاملة بدقة محاسبية صارمة.
         قواعد الفرع: {branch_rules}
         
         سياق المحادثة السابقة (الذاكرة القصيرة):
@@ -44,19 +44,22 @@ class AIService:
 
         رسالة التاجر الحالية: "{user_text}"
 
-        🧠 قواعد الفهم (إجباري):
-        1. الذاكرة والسياق: إذا كان الكلام استكمالاً لمعاملة سابقة (مثل تحديد سعر)، اربطه بالصنف والكمية في السياق السابق.
-        2. الكمية والوحدة: استخرج الكمية والوحدة التي أذكرها التاجر بدقة (مثلاً: 10 كرتونة).
-        3. تحويل الوحدات: إذا ذكر التاجر تعبئة الكرتونة أو العلبة (مثال: "الكرتونة 20 كيس")، استخرج:
-           - `major_unit`: الوحدة الكبرى ("كرتونة").
-           - `minor_unit`: الوحدة الصغرى ("كيس" أو "قطعة").
-           - `conversion_factor`: معامل التحويل المذكور (مثلاً 20.0). إذا لم يذكر اجعله 1.0.
-        4. التقسيط: إذا كانت العملية تقسيط أو آجل، اجعل `is_installment` تساوي true واستخرج المقدم (`down_payment`) وقيمة القسط (`installment_value`) وتاريخ الاستحقاق (`due_date`).
-        5. لا تستخدم أي علامات تنصيص مزدوجة داخل قيم النصوص المرجعة لتجنب تلف الـ JSON.
+        🧠 قواعد الفهم الصارمة (إجباري):
+        1. منع هلوسة الأسعار: لا تفترض أو تسحب أي سعر من المحادثات السابقة لمعاملة جديدة إطلاقاً. إذا لم يذكر التاجر السعر صراحة في الرسالة الحالية، اجعل `unit_price` تساوي 0.0.
+        2. التعامل مع السعر المفقود: إذا كان السعر 0.0، اكتب في `message_to_user` رداً يوضح أنه تم تسجيل الكمية في المخزن بنجاح مع التنبيه بطلب السعر لاحقاً لتسوية الفاتورة (مثال: "تم إضافة الشحنة للمخزن بنجاح بدون سعر، يمكنك إدخال السعر الآن أو التسعير لاحقاً").
+        3. استكمال التسعير من الذاكرة: استخدم الذاكرة السابقة فقط إذا كانت رسالة التاجر الحالية إجابة مباشرة لتحديد سعر معاملة معلقة (مثل إرسال "سعر الكيس 9 جنيه"). وفي هذه الحالة اجعل `type` يساوي "UPDATE_PRICE".
+        4. استخراج الوحدات والتحويل: إذا ذكر التاجر عبوة الكرتونة/العلبة (مثل: "10 كرتونة والكرتونة 20 كيس"):
+           - `quantity`: 10.0 (الكمية بالوحدة المذكورة)
+           - `unit`: "كرتونة"
+           - `major_unit`: "كرتونة"
+           - `minor_unit`: "كيس"
+           - `conversion_factor`: 20.0
+        5. التقسيط: إذا كانت العملية تقسيط أو آجل، اجعل `is_installment` تساوي true واستخرج المقدم (`down_payment`) وقيمة القسط (`installment_value`) وتاريخ الاستحقاق (`due_date`).
+        6. لا تستخدم أي علامات تنصيص مزدوجة داخل قيم النصوص المرجعة لتجنب تلف الـ JSON.
 
         نسق المخرجات داخل هيكل JSON التالي حصرياً وبدون أي أوسمة إضافية:
         {{
-            "type": "PURCHASE" | "SALE" | "QUERY" | "INCOMPLETE",
+            "type": "PURCHASE" | "SALE" | "QUERY" | "INCOMPLETE" | "UPDATE_PRICE",
             "item_name": "اسم الصنف",
             "brand": "اسم الماركة أو غير محدد",
             "supplier": "اسم المورد/العميل أو غير محدد",
@@ -70,7 +73,7 @@ class AIService:
             "down_payment": 0.0,
             "installment_value": 0.0,
             "due_date": "غير محدد",
-            "message_to_user": "رد احترافي للتاجر يشرح تفاصيل المعاملة"
+            "message_to_user": "رد احترافي للتاجر يوضح ما تم تسجيله بدقة"
         }}
         """
         
@@ -79,7 +82,7 @@ class AIService:
         
         generation_config = genai.GenerationConfig(
             response_mime_type="application/json",
-            temperature=0.1,
+            temperature=0.0,
             max_output_tokens=500
         )
 
@@ -91,13 +94,11 @@ class AIService:
                     
                 genai.configure(api_key=current_key)
                 
-                # 🎯 نموذج gemini-3.5-flash-lite المعتمد
                 model = genai.GenerativeModel('gemini-3.5-flash-lite', generation_config=generation_config)
                 response = model.generate_content(prompt)
                 
                 raw_text = response.text.strip()
                 
-                # فلترة وتنظيف نصوص الماركداون المتبقية لضمان سلامة الـ JSON
                 if raw_text.startswith("```"):
                     lines = raw_text.splitlines()
                     if lines[0].startswith("```"):
