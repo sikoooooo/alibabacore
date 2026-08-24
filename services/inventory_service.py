@@ -3,31 +3,44 @@ from datetime import datetime
 
 class InventoryService:
 
-    # 🟢 بداية الدالة: convert_to_base_unit (تحويل الوحدات للوحدة الصغرى)
+    # 🟢 بداية الدالة: convert_to_base_unit (تحويل الكميات للوحدة الصغرى واحتساب المعامل)
     @staticmethod
-    def convert_to_base_unit(branch: str, item_name: str, quantity: float, unit: str):
+    def convert_to_base_unit(branch: str, item_name: str, quantity: float, unit: str, parsed: dict = None):
         """
-        تحويل الكمية المدخلة للوحدة الصغرى بناءً على معامل التحويل في قاعدة البيانات.
+        تحويل الكمية المدخلة للوحدة الصغرى بناءً على بيانات المعاملة أو قاعدة البيانات.
         """
+        parsed = parsed or {}
+        conv_factor = float(parsed.get("conversion_factor") or 1.0)
+        major_u = parsed.get("major_unit") or "كرتونة"
+        minor_u = parsed.get("minor_unit") or "قطعة"
+
         try:
-            inv_res = supabase.table("inventory").select("conversion_factor, minor_unit, major_unit").eq("branch", branch).ilike("item_name", item_name).execute()
-            if inv_res.data:
-                row = inv_res.data[0]
-                conversion_factor = float(row.get("conversion_factor") or 1.0)
-                major_unit = row.get("major_unit")
-                
-                if major_unit and unit.strip().lower() == major_unit.strip().lower() and conversion_factor > 1:
-                    base_qty = quantity * conversion_factor
-                    minor_unit = row.get('minor_unit', 'قطعة')
-                    return base_qty, f"تم تحويل {quantity} {unit} إلى {base_qty} {minor_unit}"
+            # إذا لم يُذكر معامل تحويل في الرسالة، استعلم من قاعدة البيانات
+            if conv_factor <= 1.0:
+                inv_res = supabase.table("inventory").select("conversion_factor, minor_unit, major_unit").eq("branch", branch).ilike("item_name", item_name).execute()
+                if inv_res.data:
+                    row = inv_res.data[0]
+                    conv_factor = float(row.get("conversion_factor") or 1.0)
+                    major_u = row.get("major_unit") or major_u
+                    minor_u = row.get("minor_unit") or minor_u
+
+            # إجراء التحويل للوحدة الصغرى إذا كانت الوحدة كبرى
+            if conv_factor > 1.0:
+                unit_clean = unit.strip().lower()
+                major_clean = major_u.strip().lower()
+                minor_clean = minor_u.strip().lower()
+
+                if unit_clean == major_clean or (unit_clean != minor_clean and conv_factor > 1):
+                    base_qty = quantity * conv_factor
+                    return base_qty, f"تم تحويل {quantity} {unit} إلى {base_qty} {minor_u}", conv_factor, major_u, minor_u
         except Exception as e:
-            print(f"Unit conversion check error: {e}")
+            print(f"Unit conversion error: {e}")
         
-        return quantity, ""
+        return quantity, "", conv_factor, major_u, minor_u
     # 🔴 نهاية الدالة: convert_to_base_unit
 
 
-    # 🟢 بداية الدالة: query_inventory (عرض المخزون بالكراتين والقطع)
+    # 🟢 بداية الدالة: query_inventory (عرض المخزون بالرصيد المزدوج)
     @staticmethod
     def query_inventory(branch: str, item_name: str = None):
         """
@@ -76,30 +89,70 @@ class InventoryService:
     # 🔴 نهاية الدالة: query_inventory
 
 
-    # 🟢 بداية الدالة: execute_transaction (تنفيذ المبيعات/المشتريات المعزولة)
+    # 🟢 بداية الدالة: execute_transaction (تنفيذ وإدارة المبيعات والمشتريات وتسوية الأسعار المعلقة)
     @staticmethod
     def execute_transaction(branch: str, parsed: dict, user_text: str):
         """
-        تنفيذ وتسجيل المبيعات والمشتريات وتحديث جدول المخزون ودليل اليومية معزولاً.
+        تنفيذ المبيعات والمشتريات وتحديث المخزون ودعم الأسعار المعلقة والتحديث اللاحق.
         """
         try:
-            company_id, branch_id = db_manager.ensure_default_enterprise_setup(branch)
-            if not company_id or not branch_id:
-                return False, "فشل تحديد الفرع والشركة في قاعدة البيانات."
-
-            trans_type = parsed.get("type")
+            company_id, branch_id = db_manager.ensure_default enterprise_setup(branch) if hasattr(db_manager, 'ensure_default_enterprise_setup') else (None, None)
+            
+            trans_type = parsed.get("type", "PURCHASE")
             item_name = parsed.get("item_name", "غير محدد").strip()
             brand = parsed.get("brand", "غير محدد")
             supplier = parsed.get("supplier", "غير محدد")
-            quantity = float(parsed.get("quantity", 1.0))
+            raw_quantity = float(parsed.get("quantity", 1.0))
             unit = parsed.get("unit", "وحدة")
             unit_price = float(parsed.get("unit_price", 0.0))
-            total_amount = quantity * unit_price
 
-            # 1. تحويل الكميات للوحدة الصغرى
-            base_quantity, conversion_note = InventoryService.convert_to_base_unit(branch, item_name, quantity, unit)
+            # 1. تحويل الكمية إلى الوحدة الصغرى واستخراج معامل التحويل
+            base_quantity, conversion_note, conv_factor, major_unit, minor_unit = InventoryService.convert_to_base_unit(
+                branch, item_name, raw_quantity, unit, parsed
+            )
 
-            # 2. تسجيل المعاملة
+            # 2. حساب الإجمالي المالي الصحيح بناءً على السعر والوحدة
+            if unit_price > 0:
+                # إذا كانت الكمية محولة والسعر مسعر للوحدة الصغرى (مثال: سعر الكيس)
+                if base_quantity != raw_quantity and (parsed.get("unit") == minor_unit or unit_price < 100):
+                    total_amount = base_quantity * unit_price
+                else:
+                    total_amount = raw_quantity * unit_price
+            else:
+                total_amount = 0.0
+
+            # 3. معالجة حالة تحديث سعر معاملة معلقة سابقة (UPDATE_PRICE)
+            if trans_type == "UPDATE_PRICE":
+                # البحث عن آخر معاملة معلقة بدون سعر بنفس الصنف
+                pending_query = supabase.table("transactions").select("*").eq("branch", branch)\
+                    .ilike("item_name", f"%{item_name}%").eq("total_amount", 0.0).order("created_at", desc=True).limit(1).execute()
+                
+                if pending_query.data:
+                    pending_trans = pending_query.data[0]
+                    target_qty = float(pending_trans.get("quantity") or base_quantity)
+                    new_total = target_qty * unit_price if unit_price > 0 else total_amount
+
+                    # تحديث المعاملة السابقة
+                    supabase.table("transactions").update({
+                        "unit_price": unit_price,
+                        "total_amount": new_total
+                    }).eq("id", pending_trans["id"]).execute()
+
+                    # تسجيل قيد اليومية للسعر المحدث
+                    journal_data = {
+                        "company_id": company_id,
+                        "branch_id": branch_id,
+                        "branch_name": branch,
+                        "description": f"تسوية سعر {item_name} - {supplier} بسعر {unit_price} ج.م",
+                        "amount": new_total,
+                        "entry_type": pending_trans.get("type", "PURCHASE"),
+                        "created_at": datetime.utcnow().isoformat()
+                    }
+                    supabase.table("journal_entries").insert(journal_data).execute()
+
+                    return True, f"✅ تم تحديث السعر وتسوية الفاتورة بنجاح! (الإجمالي الجديد: {new_total:,.2f} ج.م)"
+
+            # 4. تسجيل حركة جديدة في جدول المعاملات
             trans_data = {
                 "company_id": company_id,
                 "branch_id": branch_id,
@@ -117,25 +170,37 @@ class InventoryService:
             }
             supabase.table("transactions").insert(trans_data).execute()
 
-            # 3. قيود اليومية
-            journal_data = {
-                "company_id": company_id,
-                "branch_id": branch_id,
-                "branch_name": branch,
-                "description": f"{'مبيعات' if trans_type == 'SALE' else 'مشتريات'} {item_name} - {supplier} ({quantity} {unit})",
-                "amount": total_amount,
-                "entry_type": trans_type,
-                "created_at": datetime.utcnow().isoformat()
-            }
-            supabase.table("journal_entries").insert(journal_data).execute()
+            # 5. تسجيل القيود المالية (فقط إذا كان هناك مبلغ مسجل)
+            if total_amount > 0:
+                journal_data = {
+                    "company_id": company_id,
+                    "branch_id": branch_id,
+                    "branch_name": branch,
+                    "description": f"{'مبيعات' if trans_type == 'SALE' else 'مشتريات'} {item_name} - {supplier} ({raw_quantity} {unit})",
+                    "amount": total_amount,
+                    "entry_type": trans_type,
+                    "created_at": datetime.utcnow().isoformat()
+                }
+                supabase.table("journal_entries").insert(journal_data).execute()
 
-            # 4. تحديث جدول المخزون
+            # 6. تحديث جدول المخزون (تخزين بالوحدة الصغرى وحفظ أبعاد التحويل)
             inv_query = supabase.table("inventory").select("*").eq("branch", branch).ilike("item_name", item_name).execute()
+            
             if inv_query.data:
                 current_row = inv_query.data[0]
                 current_qty = float(current_row.get("quantity") or current_row.get("total_base_quantity") or 0.0)
                 new_qty = (current_qty + base_quantity) if trans_type == "PURCHASE" else (current_qty - base_quantity)
-                supabase.table("inventory").update({"quantity": new_qty, "total_base_quantity": new_qty}).eq("id", current_row["id"]).execute()
+                
+                update_payload = {
+                    "quantity": new_qty,
+                    "total_base_quantity": new_qty
+                }
+                if conv_factor > 1:
+                    update_payload["conversion_factor"] = conv_factor
+                    update_payload["major_unit"] = major_unit
+                    update_payload["minor_unit"] = minor_unit
+
+                supabase.table("inventory").update(update_payload).eq("id", current_row["id"]).execute()
             else:
                 initial_qty = base_quantity if trans_type == "PURCHASE" else -base_quantity
                 supabase.table("inventory").insert({
@@ -146,10 +211,18 @@ class InventoryService:
                     "brand": brand,
                     "quantity": initial_qty,
                     "total_base_quantity": initial_qty,
-                    "unit": unit
+                    "unit": minor_unit if conv_factor > 1 else unit,
+                    "major_unit": major_unit,
+                    "minor_unit": minor_unit,
+                    "conversion_factor": conv_factor
                 }).execute()
 
-            msg = f"تم حفظ المعاملة بنجاح! (الإجمالي: {total_amount:,.2f} ج.م)"
+            # 7. صياغة الرد للتاجر
+            if total_amount == 0.0:
+                msg = f"✅ تم حفظ الكمية بالمخزن بنجاح (+{int(base_quantity) if base_quantity.is_integer() else base_quantity} {minor_unit})!\n⚠️ المعاملة معلقة السعر، يمكنك إدخال السعر الآن أو التسعير لاحقاً."
+            else:
+                msg = f"✅ تم حفظ المعاملة بنجاح! (الإجمالي: {total_amount:,.2f} ج.م)"
+            
             if conversion_note:
                 msg += f"\n📦 {conversion_note}"
             return True, msg
