@@ -186,6 +186,7 @@ class InventoryService:
                 "item_name": item_name,
                 "brand": brand,
                 "supplier_customer": supplier,
+                "input_quantity": raw_quantity,  # 👈 السطر الجديد اللي هيحل المشكلة
                 "quantity": base_quantity,
                 "unit": unit,
                 "unit_price": unit_price,
