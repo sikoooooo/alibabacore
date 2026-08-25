@@ -130,8 +130,8 @@ class InventoryService:
                     formatted_qty = " و ".join(details)
                     total_str = f"{int(total_qty)}" if total_qty.is_integer() else f"{total_qty:.1f}"
                     response_lines.append(f"- **{name}:** {formatted_qty} *(إجمالي: {total_str} {minor_unit})*")
-                else:
-                    total_str = f"{int(total_qty)}" if total_str := total_qty:
+               else:
+                    total_str = f"{int(total_qty)}" if total_qty.is_integer() else f"{total_qty:.1f}"
                     unit = row.get("unit") or minor_unit
                     response_lines.append(f"- **{name}:** {total_str} {unit}")
 
