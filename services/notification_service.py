@@ -12,6 +12,16 @@ def get_supabase_client() -> Client:
 class NotificationService:
     
     @classmethod
+def notify_slow_moving(cls, item_name: str, days_inactive: int, current_qty: float, 
+                       marketing_suggestion: str, branch_id: str = None) -> Dict[str, Any]:
+    """تنبيه بالبضائع الراكدة مصحوباً باقتراح تسويقي من الـ AI."""
+    return cls.create_notification(
+        title="💡 تنبيه صنف راكد + اقتراح تسويقي",
+        message=f"الصنف '{item_name}' لم يتحرك منذ {days_inactive} يوماً (الرصيد: {current_qty}).\n💡 اقتراح النظام: {marketing_suggestion}",
+        alert_type="SLOW_MOVING",
+        branch_id=branch_id
+    )
+    @classmethod
     def create_notification(cls, title: str, message: str, alert_type: str = "INFO", 
                             user_id: str = None, branch_id: str = None) -> Dict[str, Any]:
         """
