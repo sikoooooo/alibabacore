@@ -119,7 +119,7 @@ class AIService:
                 genai.configure(api_key=current_key)
                 
                 # استخدام اسم الموديل المستقر والأسرع في معالجة البيانات النصية
-                model = genai.GenerativeModel('gemini-2.5-flash', generation_config=generation_config)
+                model = genai.GenerativeModel('gemini-3.5-flash-lite', generation_config=generation_config)
                 response = model.generate_content(prompt)
                 
                 raw_text = response.text.strip()
