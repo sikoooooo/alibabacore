@@ -1,8 +1,31 @@
+import os
+import streamlit as st
 from datetime import datetime, timedelta
-from core.database import supabase, db_manager
+from typing import Optional
+from supabase import create_client, Client
 from services.notification_service import NotificationService
 
+def get_supabase_client() -> Optional[Client]:
+    """إرجاع كائن الاتصال بقاعدة البيانات بأمان عالي لدعم Streamlit Cloud"""
+    try:
+        from core.database import supabase
+        if supabase: return supabase
+    except Exception:
+        pass
+    
+    url = getattr(st, "secrets", {}).get("SUPABASE_URL") or getattr(st, "secrets", {}).get("supabase_url") or os.getenv("SUPABASE_URL", "")
+    key = getattr(st, "secrets", {}).get("SUPABASE_KEY") or getattr(st, "secrets", {}).get("supabase_key") or os.getenv("SUPABASE_KEY", "")
+    
+    if not url or not key: return None
+    return create_client(url, key)
+
+try:
+    from core.database import db_manager
+except ImportError:
+    db_manager = None
+
 class InventoryService:
+    
     @staticmethod
     def convert_to_base_unit(branch: str, item_name: str, quantity: float, unit: str, parsed: dict = None):
         parsed = parsed or {}
@@ -11,6 +34,11 @@ class InventoryService:
         minor_u = parsed.get("minor_unit") or "قطعة"
         brand = parsed.get("brand", "غير محدد")
         supplier = parsed.get("supplier", "غير محدد")
+        supabase = get_supabase_client()
+        
+        if not supabase:
+            return quantity, "", conv_factor, major_u, minor_u
+
         try:
             if conv_factor <= 1.0:
                 units_res = supabase.table("item_units").select("conversion_factor, major_unit, minor_unit")\
@@ -19,6 +47,7 @@ class InventoryService:
                 if not units_res.data:
                     units_res = supabase.table("item_units").select("conversion_factor, major_unit, minor_unit")\
                         .eq("branch", branch).ilike("item_name", item_name).execute()
+                
                 if units_res.data:
                     row = units_res.data[0]
                     conv_factor = float(row.get("conversion_factor") or 1.0)
@@ -46,8 +75,9 @@ class InventoryService:
 
     @staticmethod
     def save_item_unit_preference(branch: str, item_name: str, brand: str, supplier: str, major_unit: str, minor_unit: str, conversion_factor: float):
-        if conversion_factor <= 1.0:
-            return
+        if conversion_factor <= 1.0: return
+        supabase = get_supabase_client()
+        if not supabase: return
         try:
             check_q = supabase.table("item_units").select("id").eq("branch", branch)\
                 .ilike("item_name", item_name).ilike("brand", brand).ilike("supplier", supplier).execute()
@@ -69,13 +99,21 @@ class InventoryService:
 
     @staticmethod
     def query_inventory(branch: str, item_name: str = None):
+        supabase = get_supabase_client()
+        if not supabase:
+            return False, "⚠️ تعذر الاتصال بقاعدة البيانات. المخزن غير متاح الآن."
+            
         try:
             query = supabase.table("inventory").select("*").eq("branch", branch)
-            if item_name and item_name != "غير محدد":
+            
+            # إذا كان اسم الصنف موجوداً ولا يساوي "غير محدد"، قم بفلترة النتائج
+            if item_name and item_name.strip() and item_name.strip() != "غير محدد":
                 query = query.ilike("item_name", f"%{item_name}%")
+                
             res = query.execute()
+            
             if not res.data:
-                return True, f"🔍 لم يتم العثور على صنف يطابق '{item_name}' في المخزن." if item_name else "🔍 المخزن فارغ حالياً."
+                return True, f"🔍 لم يتم العثور على صنف يطابق '{item_name}' في المخزن." if item_name and item_name != "غير محدد" else "🔍 المخزن فارغ حالياً."
             
             response_lines = ["📦 **نتائج الاستعلام عن المخزن:**\n"]
             for row in res.data:
@@ -92,8 +130,7 @@ class InventoryService:
                     major_count = int(total_qty // conversion_factor)
                     minor_count = total_qty % conversion_factor
                     details = []
-                    if major_count > 0:
-                        details.append(f"{major_count} {major_unit}")
+                    if major_count > 0: details.append(f"{major_count} {major_unit}")
                     if minor_count > 0 or major_count == 0:
                         minor_str = f"{int(minor_count)}" if minor_count.is_integer() else f"{minor_count:.1f}"
                         details.append(f"{minor_str} {minor_unit}")
@@ -110,7 +147,8 @@ class InventoryService:
 
     @staticmethod
     def _record_treasury(branch: str, flow_type: str, amount: float, description: str):
-        """تسجيل النقدية في حركة الخزينة والدرج آلياً."""
+        supabase = get_supabase_client()
+        if not supabase: return
         try:
             supabase.table("treasury_ledger").insert({
                 "branch": branch,
@@ -123,12 +161,16 @@ class InventoryService:
 
     @staticmethod
     def execute_transaction(branch: str, parsed: dict, user_text: str):
+        supabase = get_supabase_client()
+        if not supabase:
+            return False, "⚠️ فشل الحفظ: لا يمكن الاتصال بقاعدة البيانات."
+            
         try:
-            company_id, branch_id = db_manager.ensure_default_enterprise_setup(branch) if hasattr(db_manager, 'ensure_default_enterprise_setup') else (None, None)
+            company_id, branch_id = db_manager.ensure_default_enterprise_setup(branch) if db_manager and hasattr(db_manager, 'ensure_default_enterprise_setup') else (None, None)
             trans_type = parsed.get("type", "PURCHASE")
             item_name = parsed.get("item_name", "غير محدد").strip()
             brand = parsed.get("brand", "غير محدد")
-            supplier = parsed.get("supplier", "غير محدد")
+            supplier = parsed.get("supplier_customer") or parsed.get("supplier") or "غير محدد"
             raw_quantity = float(parsed.get("quantity", 1.0))
             unit = parsed.get("unit", "وحدة")
             unit_price = float(parsed.get("unit_price", 0.0))
@@ -138,9 +180,7 @@ class InventoryService:
             )
 
             if conv_factor > 1.0:
-                InventoryService.save_item_unit_preference(
-                    branch, item_name, brand, supplier, major_unit, minor_unit, conv_factor
-                )
+                InventoryService.save_item_unit_preference(branch, item_name, brand, supplier, major_unit, minor_unit, conv_factor)
 
             if unit_price > 0:
                 if base_quantity != raw_quantity and (parsed.get("unit") == minor_unit or unit_price < 100):
@@ -158,10 +198,7 @@ class InventoryService:
                     pending_trans = pending_query.data[0]
                     target_qty = float(pending_trans.get("quantity") or base_quantity)
                     new_total = target_qty * unit_price if unit_price > 0 else total_amount
-                    supabase.table("transactions").update({
-                        "unit_price": unit_price,
-                        "total_amount": new_total
-                    }).eq("id", pending_trans["id"]).execute()
+                    supabase.table("transactions").update({"unit_price": unit_price, "total_amount": new_total}).eq("id", pending_trans["id"]).execute()
 
                     journal_data = {
                         "company_id": company_id,
@@ -202,7 +239,7 @@ class InventoryService:
 
             # 3. إرسال تنبيه فور تسجيل حركة بدون سعر
             if total_amount == 0.0 and trans_type in ["PURCHASE", "SALE"]:
-                NotificationService.notify_missing_price(item_name, str(tx_id), branch_id)
+                NotificationService.notify_missing_price(item_name, str(tx_id), branch_id, branch)
 
             # 4. تسجيل قيود اليومية وحركة الدرج الخزينة
             if total_amount > 0:
@@ -256,7 +293,7 @@ class InventoryService:
 
                 # تنبيه النواقص
                 if new_qty <= min_stock:
-                    NotificationService.notify_low_stock(item_name, new_qty, branch_id)
+                    NotificationService.notify_low_stock(item_name, new_qty, branch_id, branch)
             else:
                 initial_qty = base_quantity if trans_type in ["PURCHASE", "RETURN"] else -base_quantity
                 initial_cost = unit_price if (trans_type == "PURCHASE" and unit_price > 0) else 0.0
@@ -290,13 +327,12 @@ class InventoryService:
 
     @staticmethod
     def check_slow_moving_items(branch: str, days_threshold: int = 30) -> list:
-        """
-        رصد الأصناف الراكدة (التي لم تباع منذ N يوماً) وإرسال تنبيه مع عرض تسويقي مقترح.
-        """
+        supabase = get_supabase_client()
+        if not supabase: return []
+        
         try:
             inv_res = supabase.table("inventory").select("*").eq("branch", branch).gt("quantity", 0).execute()
-            if not inv_res.data:
-                return []
+            if not inv_res.data: return []
 
             slow_items = []
             cutoff_date = (datetime.utcnow() - timedelta(days=days_threshold)).isoformat()
@@ -305,22 +341,18 @@ class InventoryService:
                 item_name = item.get("item_name")
                 qty = float(item.get("quantity") or 0.0)
 
-                # البحث عن آخر عملية بيع لهذا الصنف
                 recent_sales = supabase.table("transactions").select("created_at")\
-                    .eq("branch", branch)\
-                    .eq("type", "SALE")\
-                    .ilike("item_name", item_name)\
-                    .gt("created_at", cutoff_date)\
-                    .limit(1).execute()
+                    .eq("branch", branch).eq("type", "SALE").ilike("item_name", item_name)\
+                    .gt("created_at", cutoff_date).limit(1).execute()
 
                 if not recent_sales.data:
-                    # توليد عرض تسويقي ذكي للصنف الراكد
                     suggestion = f"🎯 عرض ترويجي: اشترِ 2 قطعة من '{item_name}' واحصل على قطعة مجاناً / خصم 15% لتسريع حركة المخزون."
                     NotificationService.notify_slow_moving(
                         item_name=item_name,
                         days_inactive=days_threshold,
                         current_qty=qty,
                         marketing_suggestion=suggestion,
+                        branch=branch,
                         branch_id=item.get("branch_id")
                     )
                     slow_items.append({
