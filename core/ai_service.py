@@ -22,92 +22,97 @@ if not api_keys:
     api_keys = [""]
 
 
+PERSONA_PROMPTS = {
+    "hantouf": "أسلوبك: 'حنتوف' المحاسب الصارم، دقيق جداً وتهتم بأصغر الملاليم وتصيغ الرد بجدية وإنذارات دقيقة.",
+    "barkawi": "أسلوبك: 'بركاوي' المتفائل، تبدأ بذكر الله والبركة وتشجع التاجر بالرزق وتيسير الأمور.",
+    "kaeeb": "أسلوبك: 'كئيب' صاحب الكوميديا السوداء، تذكر التاجر بالديون والالتزامات والمصاعب بأسلوب درامي ساخر.",
+    "funny": "أسلوبك: 'الفرفوش المضحك'، تستخدم الإفيهات والفكاهة المصرية الخفيفة والمزاح أثناء توضيح المعاملة."
+}
+
+
 class AIService:
     current_key_index = 0
 
     @classmethod
-    def smart_process_command(cls, user_text: str, branch: str, branch_rules: list = None, chat_history: list = None):
-        if chat_history is None: 
+    def smart_process_command(cls, user_text: str, branch: str, persona: str = "hantouf", 
+                              branch_rules: list = None, chat_history: list = None):
+        if chat_history is None:
             chat_history = []
         if branch_rules is None:
             branch_rules = []
-        
+
+        persona_instruction = PERSONA_PROMPTS.get(persona, PERSONA_PROMPTS["hantouf"])
+
         # تجهيز الذاكرة القصيرة (آخر 4 رسائل)
         history_context = "\n".join([f"- {m['role']}: {m['content']}" for m in chat_history[-4:]]) if chat_history else "لا يوجد سياق سابق."
-        
+
         prompt = f"""
-        أنت المحاسب الذكي ومدير المخزون لنظام ERP. مهمتك تحليل كلام التاجر واستخراج بيانات المعاملة أو الاستعلام بدقة محاسبية صارمة.
+        أنت المحاسب الذكي ومدير المخزون لنظام ERP الشبكي الذكي.
+        توجيه أسلوب الرد: {persona_instruction}
         قواعد الفرع: {branch_rules}
-        
-        سياق المحادثة السابقة (الذاكرة القصيرة):
+
+        سياق المحادثة السابقة:
         {history_context}
 
         رسالة التاجر الحالية: "{user_text}"
 
-        🧠 قواعد التصنيف والفهم الصارمة (إجباري):
+        🧠 قواعد التصنيف والتحليل الصارمة (إجباري):
 
-        1. تصنيف نوع المعاملة (`type`):
-           - "QUERY": عند السؤال عن المخزون أو الرصيد المتبقي (أمثلة: "عندنا كام...", "كم متبقي من...", "رصيد ال...", "فيه كام طقم/قطعة...").
-           - "PURCHASE": عند عمليات الشراء أو التوريد للمخزن (أمثلة: "اشترينا", "وصلنا", "دخل المخزن").
-           - "SALE": عند عمليات البيع أو الخروج من المخزن (أمثلة: "بعنا", "طلعنا", "خرج").
-           - "UPDATE_PRICE": فقط إذا كانت الرسالة رداً مباشراً لتحديد سعر معاملة معلقة سابقة (مثال: "سعر الكيس 9 جنيه").
-           - "INCOMPLETE": إذا كانت الرسالة غامضة أو غير مفهومة محاسبياً.
+        1. دعم المعاملات المركبة (List of Transactions):
+           - الرسالة قد تحتوي على أكثر من معاملة (مثال: "بعنا 2 شيبسي وحصلنا 500 ج من علي ووصلنا كرتونة عصير").
+           - يجب استخراج جميع المعاملات في مصفوفة `transactions`.
 
-        2. فصل الفئات والأحجام المميزة (SKU Differentiation):
-       - يمنع تماماً دمج فئات مختلفة تحت اسم عام واحد لحماية متوسط التكلفة.
-       - إذا ذكر التاجر فئة سعرية أو حجماً/مقاساً (مثال: شيبسي أبو 5، شيبسي أبو 10، كاوتش مقاس 16)، اجعل الفئة/المقاس جزءاً أساسياً من `item_name`.
-       - أمثلة:
-         * "اشتريت كرتونة شيبسي أبو 5" -> item_name: "شيبسي (فئة 5 ج)"
-         * "بعنا 2 كرتونة شيبسي أبو 10" -> item_name: "شيبسي (فئة 10 ج)"
-         * "اشترينا طقم كاوتش بريلي 16" -> item_name: "كاوتش بريلي مقاس 16"
+        2. تصنيف أنواع المعاملات (`type`):
+           - "PURCHASE": شراء أو توريد للمخزن ("اشترينا", "وصلنا", "دخل").
+           - "SALE": بيع أو خروج من المخزن ("بعنا", "طلعنا", "خرج").
+           - "RETURN": مرتجع مشتريات أو مبيعات ("رجّعنا", "استرداد", "مرتجع", "إلغاء الحركة").
+           - "QUERY": استعلام عن رصيد أو ديون ("عندنا كام", "رصيد", "كم متبقي").
+           - "UPDATE_PRICE": تحديد سعر معاملة معلقة سابقة.
+           - "INCOMPLETE": كلام غامض أو غير مكتمل محاسبياً.
 
-        3. استخراج الوحدات والتحويلات الافتراضية (Conversion Factors):
-           - إذا ذكر العبوة والتعبئة صراحة (مثل: "10 كرتونة والكرتونة 20 كيس"):
-             * `quantity`: 10.0 | `unit`: "كرتونة" | `major_unit`: "كرتونة" | `minor_unit`: "كيس" | `conversion_factor`: 20.0
-           - إذا ذكر وحدة كبرى (كرتونة، طقم، دستة) ولم يذكر التعبئة بداخلها:
-             * طقم (كاوتش/أدوات) -> conversion_factor: 4.0 | minor_unit: "فردة" (أو قطعة)
-             * دستة -> conversion_factor: 12.0 | minor_unit: "قطعة"
-             * كرتونة (سناكس/شيبسي) -> conversion_factor: 12.0 | minor_unit: "كيس"
-             * كرتونة (معلبات/مشروبات) -> conversion_factor: 24.0 | minor_unit: "علبة"
-             * افتراضي عام للكرتونة -> conversion_factor: 12.0
+        3. تمييز الفئات والأحجام (SKU Differentiation):
+           - يمنع دمج الفئات المختلفة. أدرج الفئة أو المقاس داخل `item_name` (مثال: "شيبسي (فئة 5 ج)").
 
-        4. حظر هلوسة الأسعار والتعامل مع السعر المفقود:
-           - لا تسحب أي سعر من المحادثات السابقة لمعاملة جديدة إطلاقاً. إذا لم يذكر السعر صراحة الآن، اجعل `unit_price` = 0.0.
-           - إذا كان السعر 0.0 في عملية شراء/بيع، اكتب في `message_to_user` أنه تم تسجيل الكمية وفي انتظار السعر لتسوية الفاتورة.
+        4. الأرقام النصية والعامية:
+           - تحويل الأرقام المكتوبة نصاً ("أربع", "تلاتة", "دستتين") إلى قيم رقمية صحيحة لـ `quantity`.
 
-        5. التقسيط والآجل:
-           - إذا كانت المعاملة آجل أو تقسيط، اجعل `is_installment` = true واستخرج المقدم (`down_payment`) وقيمة القسط (`installment_value`) وتاريخ الاستحقاق (`due_date`).
-
-        6. تنسيق النصوص:
-           - تجنب استخدام علامات التنصيص المزدوجة داخل قيم النصوص المرجعة لتفادي تلف هيكل JSON.
+        5. السعر ومعدل الثقة (`confidence_score`):
+           - إذا لم يذكر السعر صراحة اجعل `unit_price` = 0.0.
+           - حدد `confidence_score` من 0.0 إلى 1.0 لمدى وضوح ودقة الرسالة.
 
         نسق المخرجات داخل هيكل JSON التالي حصرياً وبدون أي أوسمة markdown أو نصوص خارجية:
         {{
-            "type": "PURCHASE" | "SALE" | "QUERY" | "INCOMPLETE" | "UPDATE_PRICE",
-            "item_name": "اسم الصنف مميزاً بالفئة السعرية أو المقاس",
-            "brand": "اسم الماركة أو غير محدد",
-            "supplier": "اسم المورد/العميل أو غير محدد",
-            "quantity": 1.0,
-            "unit": "وحدة",
-            "major_unit": "الوحدة الكبرى أو غير محدد",
-            "minor_unit": "الوحدة الصغرى أو غير محدد",
-            "conversion_factor": 1.0,
-            "unit_price": 0.0,
-            "is_installment": false,
-            "down_payment": 0.0,
-            "installment_value": 0.0,
-            "due_date": "غير محدد",
-            "message_to_user": "رد احترافي للتاجر يوضح ما تم بدقة"
+            "confidence_score": 0.95,
+            "persona_used": "{persona}",
+            "message_to_user": "الرد بأسلوب الشخصية المختارة يوضح ما تم بدقة",
+            "transactions": [
+                {{
+                    "type": "PURCHASE" | "SALE" | "RETURN" | "QUERY" | "UPDATE_PRICE" | "INCOMPLETE",
+                    "item_name": "اسم الصنف مميزاً بالفئة السعرية أو المقاس",
+                    "brand": "اسم الماركة أو غير محدد",
+                    "supplier": "اسم المورد/العميل أو غير محدد",
+                    "quantity": 1.0,
+                    "unit": "وحدة",
+                    "major_unit": "الوحدة الكبرى أو غير محدد",
+                    "minor_unit": "الوحدة الصغرى أو غير محدد",
+                    "conversion_factor": 1.0,
+                    "unit_price": 0.0,
+                    "is_installment": false,
+                    "down_payment": 0.0,
+                    "installment_value": 0.0,
+                    "due_date": "غير محدد"
+                }}
+            ]
         }}
         """
-        
+
         max_retries = max(len(api_keys), 1)
         last_error_msg = ""
-        
+
         generation_config = genai.GenerationConfig(
             response_mime_type="application/json",
-            temperature=0.0,
-            max_output_tokens=500
+            temperature=0.2,
+            max_output_tokens=700
         )
 
         for _ in range(max_retries):
@@ -115,15 +120,12 @@ class AIService:
                 current_key = api_keys[cls.current_key_index % len(api_keys)]
                 if not current_key:
                     break
-                    
+
                 genai.configure(api_key=current_key)
-                
-                # استخدام اسم الموديل المستقر والأسرع في معالجة البيانات النصية
                 model = genai.GenerativeModel('gemini-3.5-flash-lite', generation_config=generation_config)
                 response = model.generate_content(prompt)
-                
+
                 raw_text = response.text.strip()
-                
                 if raw_text.startswith("```"):
                     lines = raw_text.splitlines()
                     if lines[0].startswith("```"):
@@ -139,19 +141,25 @@ class AIService:
                 continue
 
         return {
-            "type": "INCOMPLETE",
-            "item_name": "غير محدد",
-            "brand": "غير محدد",
-            "supplier": "غير محدد",
-            "quantity": 1.0,
-            "unit": "وحدة",
-            "major_unit": "غير محدد",
-            "minor_unit": "غير محدد",
-            "conversion_factor": 1.0,
-            "unit_price": 0.0,
-            "is_installment": False,
-            "down_payment": 0.0,
-            "installment_value": 0.0,
-            "due_date": "غير محدد",
-            "message_to_user": f"⚠️ خطأ في المعالجة: {last_error_msg}"
+            "confidence_score": 0.0,
+            "persona_used": persona,
+            "message_to_user": f"⚠️ خطأ في معالجة الطلب: {last_error_msg}",
+            "transactions": [
+                {
+                    "type": "INCOMPLETE",
+                    "item_name": "غير محدد",
+                    "brand": "غير محدد",
+                    "supplier": "غير محدد",
+                    "quantity": 1.0,
+                    "unit": "وحدة",
+                    "major_unit": "غير محدد",
+                    "minor_unit": "غير محدد",
+                    "conversion_factor": 1.0,
+                    "unit_price": 0.0,
+                    "is_installment": False,
+                    "down_payment": 0.0,
+                    "installment_value": 0.0,
+                    "due_date": "غير محدد"
+                }
+            ]
         }
