@@ -1,5 +1,5 @@
 from typing import Dict, Any
-from services.supabase_client import get_supabase_client
+from core.database import get_supabase_client
 
 class QueryService:
 
