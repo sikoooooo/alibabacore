@@ -1,5 +1,6 @@
 import sqlite3
 import os
+import json
 from datetime import datetime
 
 class LocalSyncManager:
@@ -25,13 +26,12 @@ class LocalSyncManager:
         conn.close()
 
     def save_offline(self, branch: str, raw_text: str, parsed_data: dict):
-        """حفظ الحركة محلياً عند فشل الاتصال بالسحابة"""
-        import json
+        """حفظ الحركة أو التعديل (مثل الحد الائتماني) محلياً عند فشل الاتصال بالسحابة"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         cursor.execute(
             "INSERT INTO pending_transactions (branch, raw_text, parsed_data, created_at) VALUES (?, ?, ?, ?)",
-            (branch, raw_text, json.dumps(parsed_data), datetime.now())
+            (branch, raw_text, json.dumps(parsed_data, ensure_ascii=False), datetime.now())
         )
         conn.commit()
         conn.close()
