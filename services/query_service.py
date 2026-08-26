@@ -15,7 +15,7 @@ class QueryService:
             
         try:
             if report_type == "inventory":
-                res = supabase.table("inventory").select("item_name, quantity, average_cost, cost").eq("branch", branch).execute()
+                res = supabase.table("inventory").select("item_name, quantity, average_cost").eq("branch", branch).execute()
                 if not res.data:
                     return {"status": "SUCCESS", "message": "المخزن فارغ حالياً."}
                 
