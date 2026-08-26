@@ -25,7 +25,24 @@ def process_and_display_chat(user_input):
 
                 for tx in transactions_list:
                     trans_type = tx.get("type")
-                    if trans_type and trans_type != "QUERY" and InventoryService:
+                    
+                    # معالجة تحديث الحد الائتماني المباشر من الشات
+                    if trans_type == "UPDATE_CREDIT_LIMIT":
+                        try:
+                            customer_name = tx.get("supplier") or tx.get("item_name", "غير محدد")
+                            new_limit = float(tx.get("unit_price") or 0.0)
+                            if new_limit > 0:
+                                res = InstallmentService.set_customer_credit_limit(customer_name, new_limit, branch)
+                                if res.get("status") == "SUCCESS":
+                                    execution_notes.append(res.get("message"))
+                                else:
+                                    execution_notes.append(f"❌ {res.get('message')}")
+                            else:
+                                execution_notes.append("❌ يرجى تحديد قيمة صحيحة للحد الائتماني.")
+                        except Exception as e:
+                            execution_notes.append(f"🚨 خطأ في تحديث الحد الائتماني: {str(e)}")
+                            
+                    elif trans_type and trans_type != "QUERY" and InventoryService:
                         try:
                             success, msg = InventoryService.execute_transaction(branch, tx, user_input)
                             if success:
