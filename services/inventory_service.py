@@ -1,5 +1,23 @@
 class InventoryService:
     @classmethod
+    def process_transaction(cls, branch: str, item_name: str, quantity: float, price: float, supplier: str, transaction_type: str) -> dict:
+        supabase = get_supabase_client()
+        if not supabase:
+            return {"status": "ERROR", "message": "قاعدة البيانات غير متوفرة."}
+        try:
+            data = {
+                "branch": branch,
+                "item_name": item_name,
+                "quantity": quantity,
+                "unit_price": price,
+                "supplier": supplier,
+                "type": transaction_type
+            }
+            supabase.table("transactions").insert(data).execute()
+            return {"status": "SUCCESS"}
+        except Exception as e:
+            return {"status": "ERROR", "message": str(e)}
+    @classmethod
     def update_inventory_field(cls, branch: str, item_name: str, field_name: str, new_value: Any) -> Dict[str, Any]:
         """دالة شاملة لتحديث أي خانة ناقصة أو تعديلها (المورد، البراند، إلخ) لصنف معين في جدول المخزن والحركات."""
         # ... باقي الكود كما هو بدون تغيير في المسافات الداخلية ...
