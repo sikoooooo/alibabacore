@@ -106,7 +106,6 @@ class InventoryService:
         try:
             query = supabase.table("inventory").select("*").eq("branch", branch)
             
-            # إذا كان اسم الصنف موجوداً ولا يساوي "غير محدد"، قم بفلترة النتائج
             if item_name and item_name.strip() and item_name.strip() != "غير محدد":
                 query = query.ilike("item_name", f"%{item_name}%")
                 
@@ -237,11 +236,9 @@ class InventoryService:
             inserted_tx = supabase.table("transactions").insert(trans_data).execute()
             tx_id = inserted_tx.data[0]["id"] if inserted_tx.data else "PENDING"
 
-            # 3. إرسال تنبيه فور تسجيل حركة بدون سعر
             if total_amount == 0.0 and trans_type in ["PURCHASE", "SALE"]:
                 NotificationService.notify_missing_price(item_name, str(tx_id), branch_id, branch)
 
-            # 4. تسجيل قيود اليومية وحركة الدرج الخزينة
             if total_amount > 0:
                 journal_data = {
                     "company_id": company_id,
@@ -258,8 +255,26 @@ class InventoryService:
                     flow_type = "OUTFLOW" if trans_type == "PURCHASE" else "INFLOW"
                     InventoryService._record_treasury(branch, flow_type, total_amount, f"{trans_type} - {item_name}")
 
-            # 5. تحديث المخزون والمتوسط السعري المرجح (WAC)
-            inv_query = supabase.table("inventory").select("*").eq("branch", branch).ilike("item_name", item_name).execute()
+            # 3. التحقق الذكي من رصيد الأطقم والفردات (حل مشكلة الكاوتش والطقم)
+            target_item_name = item_name
+            actual_base_qty = base_quantity
+            
+            # لو العملية بيع "طقم" أو "أطقم" ولم تجد رصيداً كافياً للأطقم، ابحث عن صنف الفردة (مثل كاوتش مستعمل) وحول الطقم لـ 4 فرد
+            if trans_type == "SALE" and ("طقم" in unit or "طقم" in item_name):
+                check_inv = supabase.table("inventory").select("*").eq("branch", branch).ilike("item_name", item_name).execute()
+                if not check_inv.data or float(check_inv.data[0].get("quantity", 0)) < base_quantity:
+                    # جرب البحث عن البديل بالفردة (مثلاً إزالة كلمة طقم أو البحث عن كاوتش مستعمل)
+                    alt_name = item_name.replace("طقم", "").strip()
+                    if not alt_name or alt_name == "":
+                        alt_name = "كاوتش مستعمل" if "كاوتش" in item_name else item_name
+                    
+                    alt_inv = supabase.table("inventory").select("*").eq("branch", branch).ilike("item_name", f"%{alt_name}%").execute()
+                    if alt_inv.data:
+                        target_item_name = alt_inv.data[0]["item_name"]
+                        actual_base_qty = base_quantity * 4  # تحويل كل طقم إلى 4 فرد
+
+            # 4. تحديث المخزون والمتوسط السعري المرجح (WAC)
+            inv_query = supabase.table("inventory").select("*").eq("branch", branch).ilike("item_name", target_item_name).execute()
             if inv_query.data:
                 current_row = inv_query.data[0]
                 current_qty = float(current_row.get("quantity") or current_row.get("total_base_quantity") or 0.0)
@@ -267,13 +282,13 @@ class InventoryService:
                 min_stock = float(current_row.get("min_stock_level") or 5.0)
 
                 if trans_type == "PURCHASE":
-                    new_qty = current_qty + base_quantity
+                    new_qty = current_qty + actual_base_qty
                     new_wac = ((current_qty * current_cost) + total_amount) / new_qty if (new_qty > 0 and unit_price > 0) else current_cost
                 elif trans_type == "SALE":
-                    new_qty = current_qty - base_quantity
+                    new_qty = current_qty - actual_base_qty
                     new_wac = current_cost
                 elif trans_type == "RETURN":
-                    new_qty = current_qty + base_quantity
+                    new_qty = current_qty + actual_base_qty
                     new_wac = current_cost
                 else:
                     new_qty = current_qty
@@ -291,17 +306,16 @@ class InventoryService:
 
                 supabase.table("inventory").update(update_payload).eq("id", current_row["id"]).execute()
 
-                # تنبيه النواقص
                 if new_qty <= min_stock:
-                    NotificationService.notify_low_stock(item_name, new_qty, branch_id, branch)
+                    NotificationService.notify_low_stock(target_item_name, new_qty, branch_id, branch)
             else:
-                initial_qty = base_quantity if trans_type in ["PURCHASE", "RETURN"] else -base_quantity
+                initial_qty = actual_base_qty if trans_type in ["PURCHASE", "RETURN"] else -actual_base_qty
                 initial_cost = unit_price if (trans_type == "PURCHASE" and unit_price > 0) else 0.0
                 supabase.table("inventory").insert({
                     "company_id": company_id,
                     "branch_id": branch_id,
                     "branch": branch,
-                    "item_name": item_name,
+                    "item_name": target_item_name,
                     "brand": brand,
                     "quantity": initial_qty,
                     "total_base_quantity": initial_qty,
@@ -312,9 +326,9 @@ class InventoryService:
                     "conversion_factor": conv_factor
                 }).execute()
 
-            # 6. صياغة النتيجة التفاعلية
+            # 5. صياغة النتيجة التفاعلية
             if total_amount == 0.0:
-                msg = f"✅ تم حفظ الكمية بالمخزن بنجاح (+{(int(base_quantity) if base_quantity.is_integer() else base_quantity)} {minor_unit})!\n⚠️ المعاملة معلقة السعر، يمكنك إدخال السعر الآن أو التسعير لاحقاً."
+                msg = f"✅ تم حفظ الكمية بالمخزن بنجاح!\n⚠️ المعاملة معلقة السعر، يمكنك إدخال السعر الآن أو التسعير لاحقاً."
             else:
                 msg = f"✅ تم حفظ المعاملة بنجاح! (الإجمالي: {total_amount:,.2f} ج.م)"
 
