@@ -125,17 +125,16 @@ with st.sidebar:
     )
     st.session_state.persona = selected_p
 
+    st.divider()
+    st.session_state.ui_mode = st.radio(
+        "اختر طريقة العرض:",
+        options=["MINIMAL_VOICE", "FULL_DASHBOARD"],
+        format_func=lambda x: "🎙️ الوضع البسيط (Voice-First)" if x == "MINIMAL_VOICE" else "📊 اللوحة الكاملة (Full BI)"
+    )
+
 current_avatar = PERSONA_DETAILS[st.session_state.persona]["avatar"]
 
-st.title(f"{current_avatar} المحاسب الذكي - نواة علي بابا")
-st.caption(f"📍 الفرع: **{branch}** | 🎭 الشخصية: **{PERSONA_DETAILS[st.session_state.persona]['name']}**")
-
-for message in st.session_state.messages:
-    avatar_icon = current_avatar if message["role"] == "assistant" else "🧑‍💼"
-    with st.chat_message(message["role"], avatar=avatar_icon):
-        st.markdown(message["content"])
-
-if user_input := st.chat_input("سجل معاملتك أو اسأل عن المخزون..."):
+def process_and_display_chat(user_input):
     st.session_state.messages.append({"role": "user", "content": user_input})
     with st.chat_message("user", avatar="🧑‍💼"):
         st.markdown(user_input)
@@ -179,3 +178,50 @@ if user_input := st.chat_input("سجل معاملتك أو اسأل عن الم�
 
             st.markdown(response_text)
             st.session_state.messages.append({"role": "assistant", "content": response_text})
+
+if st.session_state.ui_mode == "MINIMAL_VOICE":
+    st.title(f"{current_avatar} المحاسب الذكي - نواة علي بابا")
+    st.caption(f"📍 الفرع: **{branch}** | 🎭 الشخصية: **{PERSONA_DETAILS[st.session_state.persona]['name']}**")
+    
+    for message in st.session_state.messages:
+        avatar_icon = current_avatar if message["role"] == "assistant" else "🧑‍💼"
+        with st.chat_message(message["role"], avatar=avatar_icon):
+            st.markdown(message["content"])
+
+    if user_input := st.chat_input("سجل معاملتك أو اسأل عن المخزون..."):
+        process_and_display_chat(user_input)
+else:
+    st.title(f"📊 المحاسب الذكي - لوحة تحليلات الأعمال ({branch})")
+    
+    main_tab, inv_tab, reports_tab, notif_tab = st.tabs([
+        "💬 الدردشة", "📦 المخزون", "📊 التقارير", "🔔 التنبيهات"
+    ])
+    
+    with main_tab:
+        for message in st.session_state.messages:
+            avatar_icon = current_avatar if message["role"] == "assistant" else "🧑‍💼"
+            with st.chat_message(message["role"], avatar=avatar_icon):
+                st.markdown(message["content"])
+
+        if user_input := st.chat_input("سجل معاملتك أو اسأل عن المخزون..."):
+            process_and_display_chat(user_input)
+
+    with inv_tab:
+        st.subheader("📦 رصيد المخزون الحالي")
+        if InventoryService:
+            success, inv_data = InventoryService.query_inventory(branch)
+            st.markdown(inv_data)
+
+    with reports_tab:
+        st.subheader("📊 لوحة التقارير")
+        if InstallmentService:
+            debts = InstallmentService.get_branch_debts_summary(branch)
+            if debts: st.dataframe(debts)
+            else: st.info("لا توجد ديون معلقة.")
+
+    with notif_tab:
+        st.subheader("🔔 التنبيهات")
+        if NotificationService:
+            all_notifs = NotificationService.get_unread_notifications(branch)
+            for n in all_notifs:
+                st.write(f"- {n['title']}: {n['message']}")
