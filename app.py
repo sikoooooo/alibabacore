@@ -23,6 +23,12 @@ def process_and_display_chat(user_input):
                 if not transactions_list and "type" in parsed:
                     transactions_list = [parsed]
 
+                # ترتيب المعاملات لضمان تنفيذ عمليات التحصيل/القبض قبل البيع الآجل
+                transactions_list = sorted(
+                    transactions_list, 
+                    key=lambda x: 0 if x.get("type") in ["CASH_IN", "RECEIPT", "PAYMENT", "RETURN"] else 1
+                )
+
                 for tx in transactions_list:
                     trans_type = tx.get("type")
                     
