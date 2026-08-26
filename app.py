@@ -140,7 +140,7 @@ def process_and_display_chat(user_input):
         st.markdown(user_input)
 
     with st.chat_message("assistant", avatar=current_avatar):
-        with st.spinner("جاري التنفيذ والحفظ..."):
+        with st.spinner("جاري التنفيذ..."):
             parsed, error = execute_with_key_rotation(
                 user_input, 
                 branch, 
@@ -152,7 +152,7 @@ def process_and_display_chat(user_input):
             if error or not parsed:
                 response_text = f"⚠️ عذراً، حدث خطأ: {error}"
             else:
-                ai_message = parsed.get("message_to_user", "تم الاستلام.")
+                ai_message = parsed.get("message_to_user", "تم.")
                 execution_notes = []
                 
                 transactions_list = parsed.get("transactions", [])
@@ -167,28 +167,30 @@ def process_and_display_chat(user_input):
                             if success:
                                 execution_notes.append(f"✅ {msg}")
                             else:
-                                execution_notes.append(f"❌ خطأ الحفظ: {msg}")
+                                execution_notes.append(f"❌ خطأ: {msg}")
                         except Exception as e:
                             execution_notes.append(f"🚨 خطأ برمجى: {str(e)}")
 
+                # تقصير الردود واختصارها تماماً في وضع منجز
                 if st.session_state.persona == "mongez":
                     response_text = "\n".join(execution_notes) if execution_notes else ai_message
                 else:
-                    response_text = f"{ai_message}\n\n" + "\n\n".join(execution_notes) if execution_notes else ai_message
+                    response_text = f"{ai_message}\n\n" + "\n".join(execution_notes) if execution_notes else ai_message
 
             st.markdown(response_text)
             st.session_state.messages.append({"role": "assistant", "content": response_text})
 
+# ** عرض الواجهة حسب الاختيار (وضع صوتي أو لوحة كاملة بالتابات) **
 if st.session_state.ui_mode == "MINIMAL_VOICE":
     st.title(f"{current_avatar} المحاسب الذكي - نواة علي بابا")
-    st.caption(f"📍 الفرع: **{branch}** | 🎭 الشخصية: **{PERSONA_DETAILS[st.session_state.persona]['name']}**")
+    st.caption(f"📍 الفرع: **{branch}**")
     
     for message in st.session_state.messages:
         avatar_icon = current_avatar if message["role"] == "assistant" else "🧑‍💼"
         with st.chat_message(message["role"], avatar=avatar_icon):
             st.markdown(message["content"])
 
-    if user_input := st.chat_input("سجل معاملتك أو اسأل عن المخزون..."):
+    if user_input := st.chat_input("سجل معاملتك أو اسأل..."):
         process_and_display_chat(user_input)
 else:
     st.title(f"📊 المحاسب الذكي - لوحة تحليلات الأعمال ({branch})")
@@ -203,7 +205,7 @@ else:
             with st.chat_message(message["role"], avatar=avatar_icon):
                 st.markdown(message["content"])
 
-        if user_input := st.chat_input("سجل معاملتك أو اسأل عن المخزون..."):
+        if user_input := st.chat_input("سجل معاملتك أو اسأل..."):
             process_and_display_chat(user_input)
 
     with inv_tab:
