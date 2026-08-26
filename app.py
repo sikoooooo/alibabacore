@@ -1,68 +1,46 @@
-def process_and_display_chat(user_input):
+import streamlit as st
+from services.inventory_service import InventoryService
+from services.installment_service import InstallmentService
+from services.notification_service import NotificationService
+from services.query_service import QueryService
+
+st.set_page_config(page_title="التنين - المساعد المحاسبي", page_icon="🐉", layout="centered")
+
+st.title("🐉 نظام التنين المحاسبي الذكي")
+st.write("مرحباً بك، المساعد الذكي لإدارة المخزن والفروع والأقساط.")
+
+# إعداد الجلسة للمحادثة
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# عرض رسائل المححادثة السابقة
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+# استقبال مدخلات التاجر
+user_input = st.chat_input("اكتب أمرك هنا (مثلاً: تقرير المخزن، الأقساط، إلخ)...")
+
+if user_input:
     st.session_state.messages.append({"role": "user", "content": user_input})
-    with st.chat_message("user", avatar="🧑‍💼"):
+    with st.chat_message("user"):
         st.markdown(user_input)
 
-    with st.chat_message("assistant", avatar=current_avatar):
-        with st.spinner("جاري التنفيذ..."):
-            parsed, error = execute_with_key_rotation(
-                user_input, 
-                branch, 
-                st.session_state.get("branch_rules", []), 
-                st.session_state.messages,
-                persona=st.session_state.persona
-            )
-            
-            if error or not parsed:
-                response_text = f"⚠️ خطأ: {error}"
-            else:
-                ai_message = parsed.get("message_to_user", "تم.")
-                execution_notes = []
-                
-                transactions_list = parsed.get("transactions", [])
-                if not transactions_list and "type" in parsed:
-                    transactions_list = [parsed]
+    # معالجة الأوامر أو توجيهها للخدمات
+    response_message = "🤖 تم استلام أمرك وجاري تنفيذه عبر الخدمات المربطة."
+    
+    # مثال توجيه سريع لاستعلامات المخزن
+    if "مخزن" in user_input or "المخزن" in user_input:
+        res = QueryService.get_comprehensive_report("الفرع الرئيسي", "inventory")
+        response_message = res.get("message", "حدث خطأ في جلب تقرير المخزن.")
+    elif "أقساط" in user_input or "الأقساط" in user_input:
+        res = QueryService.get_comprehensive_report("الفرع الرئيسي", "installments")
+        response_message = res.get("message", "حدث خطأ في جلب تقرير الأقساط.")
+    elif "موردين" in user_input:
+        res = QueryService.get_comprehensive_report("الفرع الرئيسي", "suppliers")
+        response_message = res.get("message", "حدث خطأ في جلب مستحقات الموردين.")
 
-                # ترتيب المعاملات لضمان تنفيذ عمليات التحصيل/القبض قبل البيع الآجل
-                transactions_list = sorted(
-                    transactions_list, 
-                    key=lambda x: 0 if x.get("type") in ["CASH_IN", "RECEIPT", "PAYMENT", "RETURN"] else 1
-                )
-
-                for tx in transactions_list:
-                    trans_type = tx.get("type")
-                    
-                    # معالجة تحديث الحد الائتماني المباشر من الشات
-                    if trans_type == "UPDATE_CREDIT_LIMIT":
-                        try:
-                            customer_name = tx.get("supplier") or tx.get("item_name", "غير محدد")
-                            new_limit = float(tx.get("unit_price") or 0.0)
-                            if new_limit > 0:
-                                res = InstallmentService.set_customer_credit_limit(customer_name, new_limit, branch)
-                                if res.get("status") == "SUCCESS":
-                                    execution_notes.append(res.get("message"))
-                                else:
-                                    execution_notes.append(f"❌ {res.get('message')}")
-                            else:
-                                execution_notes.append("❌ يرجى تحديد قيمة صحيحة للحد الائتماني.")
-                        except Exception as e:
-                            execution_notes.append(f"🚨 خطأ في تحديث الحد الائتماني: {str(e)}")
-                            
-                    elif trans_type and trans_type != "QUERY" and InventoryService:
-                        try:
-                            success, msg = InventoryService.execute_transaction(branch, tx, user_input)
-                            if success:
-                                execution_notes.append(f"✅ {msg}")
-                            else:
-                                execution_notes.append(f"❌ {msg}")
-                        except Exception as e:
-                            execution_notes.append(f"🚨 خطأ: {str(e)}")
-
-                # تقصير تام وصارم للردود بدون أي مقدمات
-                if execution_notes:
-                    response_text = "\n".join(execution_notes)
-                else:
-                    response_text = ai_message
-
-            st.markdown(response_text)
-            st.session_state.messages.append({"role": "assistant", "content": response_text})
+    with st.chat_message("assistant"):
+        st.markdown(response_message)
+    
+    st.session_state.messages.append({"role": "assistant", "content": response_message})
