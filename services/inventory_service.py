@@ -1,5 +1,5 @@
 @classmethod
-    def update_inventory_field(cls, branch: str, item_name: str, field_name: str, new_value: Any) -> Dict[str, Any]:
+def update_inventory_field(cls, branch: str, item_name: str, field_name: str, new_value: Any) -> Dict[str, Any]:
         """دالة شاملة لتحديث أي خانة ناقصة أو تعديلها (المورد، البراند، إلخ) لصنف معين في جدول المخزن والحركات."""
         supabase = get_supabase_client()
         if not supabase:
