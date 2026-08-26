@@ -121,6 +121,20 @@ class NotificationService:
         )
 
     @classmethod
+    def get_smart_alerts(cls, branch: str) -> Dict[str, Any]:
+        """جلب الإشعارات الذكية غير المقروءة والمنسقة للفرع."""
+        unread = cls.get_unread_notifications(branch=branch)
+        if not unread:
+            return {"status": "SUCCESS", "message": "✅ لا توجد تنبيهات جديدة حالياً."}
+        
+        formatted_msgs = [f"- [{item['title']}] {item['message']}" for item in unread]
+        return {
+            "status": "SUCCESS",
+            "count": len(unread),
+            "message": "🔔 **التنبيهات المعلقة:**\n\n" + "\n".join(formatted_msgs)
+        }
+
+    @classmethod
     def get_unread_notifications(
         cls, 
         branch_id: Optional[str] = None,
@@ -143,7 +157,7 @@ class NotificationService:
 
     @classmethod
     def mark_as_read(cls, notification_id: str) -> bool:
-        """تحديث حالة الإشعار إلى مقروء."""
+        """|تحديث حالة الإشعار إلى مقروء."""
         client = get_supabase_client()
         if not client:
             return False
