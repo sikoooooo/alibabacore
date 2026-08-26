@@ -1,58 +1,181 @@
-def handle_user_input(user_input: str):
-    st.session_state.messages.append({"role": "user", "content": user_input})
+import os
+import streamlit as st
+from datetime import datetime
+
+try:
+    from core.ai_service import AIService
+except ImportError:
+    AIService = None
+
+try:
+    from services.inventory_service import InventoryService
+except ImportError:
+    InventoryService = None
+
+try:
+    from services.installment_service import InstallmentService
+except ImportError:
+    InstallmentService = None
+
+try:
+    from services.notification_service import NotificationService
+except ImportError:
+    NotificationService = None
+
+try:
+    from core.database import supabase
+except ImportError:
+    supabase = None
+
+st.set_page_config(
+    page_title="المحاسب الذكي - نواة علي بابا",
+    page_icon="🤖",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+API_KEYS_POOL = []
+if st and hasattr(st, "secrets") and st.secrets:
+    for secret_key, val in st.secrets.items():
+        if val and isinstance(val, str) and (val.startswith("AIza") or val.startswith("AQ.") or len(val) > 20):
+            if val not in API_KEYS_POOL:
+                API_KEYS_POOL.append(val)
+
+if "api_key_index" not in st.session_state: 
+    st.session_state.api_key_index = 0
+
+def get_next_api_key():
+    if not API_KEYS_POOL: return None
+    current_key = API_KEYS_POOL[st.session_state.api_key_index % len(API_KEYS_POOL)]
+    st.session_state.api_key_index = (st.session_state.api_key_index + 1) % len(API_KEYS_POOL)
+    return current_key
+
+def execute_with_key_rotation(user_input, branch, branch_rules, messages, persona="mongez"):
+    if not AIService:
+        return None, "خدمة الذكاء الاصطناعي غير متوفرة."
     
-    parsed, error = execute_with_key_rotation(
-        user_input, 
-        branch, 
-        st.session_state.get("branch_rules", []), 
-        st.session_state.messages,
-        persona=st.session_state.persona
+    attempts = max(len(API_KEYS_POOL), 1)
+    last_error = None
+    for _ in range(attempts):
+        active_key = get_next_api_key()
+        if active_key:
+            os.environ["GOOGLE_API_KEY"] = active_key
+            os.environ["GEMINI_API_KEY"] = active_key
+        try:
+            import inspect
+            sig = inspect.signature(AIService.smart_process_command)
+            kwargs = {}
+            if "user_text" in sig.parameters: kwargs["user_text"] = user_input
+            elif "user_input" in sig.parameters: kwargs["user_input"] = user_input
+            else: kwargs["user_input"] = user_input
+
+            if "branch" in sig.parameters: kwargs["branch"] = branch
+            if "branch_rules" in sig.parameters: kwargs["branch_rules"] = branch_rules
+            if "messages" in sig.parameters: kwargs["messages"] = messages
+            elif "chat_history" in sig.parameters: kwargs["chat_history"] = messages
+            if "persona" in sig.parameters: kwargs["persona"] = persona
+
+            try:
+                return AIService.smart_process_command(**kwargs), None
+            except TypeError:
+                return AIService.smart_process_command(user_input, branch, branch_rules, messages), None
+        except Exception as e:
+            last_error = str(e)
+            if any(err_word in last_error.lower() for err_word in ["resourceexhausted", "quota", "429"]): 
+                continue
+            else: 
+                break
+    return None, last_error
+
+PERSONA_DETAILS = {
+    "mongez": {"name": "منجز (العملي السريع)", "avatar": "⚡", "desc": "إنجاز فوري بدون مقدمات أو رغي"},
+    "hantouf": {"name": "حنتوف (المحاسب الصارم)", "avatar": "⚖️", "desc": "دقيق بالمليم وإنذارات مباشرة"},
+    "barkawi": {"name": "بركاوي (المتفائل)", "avatar": "🤲", "desc": "يبدأ بالبركة ويركز على الرزق"},
+    "kaeeb": {"name": "كئيب (الكوميديا السوداء)", "avatar": "🎭", "desc": "يُذكرك بالديون والالتزامات بأسلوب درامي"},
+    "funny": {"name": "الفرفوش (المسلّي)", "avatar": "🥳", "desc": "نكات وإفيهات خفيفة أثناء إدارة الحسابات"}
+}
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "ui_mode" not in st.session_state:
+    st.session_state.ui_mode = "MINIMAL_VOICE"
+if "persona" not in st.session_state:
+    st.session_state.persona = "mongez"
+
+with st.sidebar:
+    st.title("⚙️ الإعدادات والشخصيات")
+    branch = st.selectbox("📍 اختر الفرع:", ["الفرع الرئيسي (القاهرة)", "فرع الإسكندرية"])
+
+    if "current_branch" not in st.session_state or st.session_state.current_branch != branch:
+        st.session_state.current_branch = branch
+        st.session_state.branch_rules = []
+        if supabase:
+            try:
+                rules_res = supabase.table("business_rules").select("*").eq("branch", branch).execute()
+                if rules_res and rules_res.data:
+                    st.session_state.branch_rules = rules_res.data
+            except Exception:
+                pass
+
+    st.divider()
+    selected_p = st.selectbox(
+        "اختر نمط التفاعل:",
+        options=list(PERSONA_DETAILS.keys()),
+        format_func=lambda x: f"{PERSONA_DETAILS[x]['avatar']} {PERSONA_DETAILS[x]['name']}"
     )
-    
-    if error or not parsed:
-        response_text = f"⚠️ عذراً، حدث خطأ: {error}"
-    else:
-        ai_message = parsed.get("message_to_user", "تم الاستلام.")
-        execution_notes = []
-        
-        # استخراج قائمة المعاملات سواء كانت مفردة أو داخل قائمة transactions
-        transactions_list = parsed.get("transactions", [])
-        if not transactions_list and "type" in parsed:
-            transactions_list = [parsed]
+    st.session_state.persona = selected_p
 
-        for tx in transactions_list:
-            trans_type = tx.get("type")
-            if trans_type and trans_type != "QUERY" and InventoryService:
-                try:
-                    if tx.get("is_installment") and InstallmentService:
-                        cust_name = tx.get("supplier") or tx.get("supplier_customer") or "عميل غير محدد"
-                        total_amt = float(tx.get("quantity", 1)) * float(tx.get("unit_price", 0))
-                        down_pay = float(tx.get("down_payment", 0))
-                        rem_amt = total_amt - down_pay
+current_avatar = PERSONA_DETAILS[st.session_state.persona]["avatar"]
 
-                        success, msg = InventoryService.execute_transaction(branch, tx, user_input)
-                        InstallmentService.record_installment(
-                            transaction_id="TX_INST",
-                            branch=branch,
-                            customer_name=cust_name,
-                            total_amount=total_amt,
-                            down_payment=down_pay,
-                            remaining_amount=rem_amt,
-                            due_date=tx.get("due_date", "غير محدد")
-                        )
-                        execution_notes.append(f"✅ {msg}\n💳 قسط مسجل: {rem_amt:,.2f} ج ({cust_name})")
-                    else:
-                        success, msg = InventoryService.execute_transaction(branch, tx, user_input)
-                        if success:
-                            execution_notes.append(f"✅ {msg}")
-                        else:
-                            execution_notes.append(f"❌ خطأ الحفظ: {msg}")
-                except Exception as e:
-                    execution_notes.append(f"🚨 خطأ برمجى: {str(e)}")
+st.title(f"{current_avatar} المحاسب الذكي - نواة علي بابا")
+st.caption(f"📍 الفرع: **{branch}** | 🎭 الشخصية: **{PERSONA_DETAILS[st.session_state.persona]['name']}**")
 
-        if st.session_state.persona == "mongez":
-            response_text = "\n".join(execution_notes) if execution_notes else ai_message
-        else:
-            response_text = f"{ai_message}\n\n" + "\n\n".join(execution_notes) if execution_notes else ai_message
+for message in st.session_state.messages:
+    avatar_icon = current_avatar if message["role"] == "assistant" else "🧑‍💼"
+    with st.chat_message(message["role"], avatar=avatar_icon):
+        st.markdown(message["content"])
 
-    st.session_state.messages.append({"role": "assistant", "content": response_text})
+if user_input := st.chat_input("سجل معاملتك أو اسأل عن المخزون..."):
+    st.session_state.messages.append({"role": "user", "content": user_input})
+    with st.chat_message("user", avatar="🧑‍💼"):
+        st.markdown(user_input)
+
+    with st.chat_message("assistant", avatar=current_avatar):
+        with st.spinner("جاري التنفيذ والحفظ..."):
+            parsed, error = execute_with_key_rotation(
+                user_input, 
+                branch, 
+                st.session_state.get("branch_rules", []), 
+                st.session_state.messages,
+                persona=st.session_state.persona
+            )
+            
+            if error or not parsed:
+                response_text = f"⚠️ عذراً، حدث خطأ: {error}"
+            else:
+                ai_message = parsed.get("message_to_user", "تم الاستلام.")
+                execution_notes = []
+                
+                transactions_list = parsed.get("transactions", [])
+                if not transactions_list and "type" in parsed:
+                    transactions_list = [parsed]
+
+                for tx in transactions_list:
+                    trans_type = tx.get("type")
+                    if trans_type and trans_type != "QUERY" and InventoryService:
+                        try:
+                            success, msg = InventoryService.execute_transaction(branch, tx, user_input)
+                            if success:
+                                execution_notes.append(f"✅ {msg}")
+                            else:
+                                execution_notes.append(f"❌ خطأ الحفظ: {msg}")
+                        except Exception as e:
+                            execution_notes.append(f"🚨 خطأ برمجى: {str(e)}")
+
+                if st.session_state.persona == "mongez":
+                    response_text = "\n".join(execution_notes) if execution_notes else ai_message
+                else:
+                    response_text = f"{ai_message}\n\n" + "\n\n".join(execution_notes) if execution_notes else ai_message
+
+            st.markdown(response_text)
+            st.session_state.messages.append({"role": "assistant", "content": response_text})
