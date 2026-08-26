@@ -90,7 +90,7 @@ def execute_with_key_rotation(user_input, branch, branch_rules, messages, person
                 break
     return None, last_error
 
-# 4. تفاصيل الشخصيات (تم إضافة شخصية منجز للعمل السريع المختصر)
+# 4. تفاصيل الشخصيات
 PERSONA_DETAILS = {
     "mongez": {"name": "منجز (العملي السريع)", "avatar": "⚡", "desc": "إنجاز فوري بدون مقدمات أو رغي"},
     "hantouf": {"name": "حنتوف (المحاسب الصارم)", "avatar": "⚖️", "desc": "دقيق بالمليم وإنذارات مباشرة"},
@@ -154,7 +154,7 @@ with st.sidebar:
 
 current_avatar = PERSONA_DETAILS[st.session_state.persona]["avatar"]
 
-# 7. دالة معالجة التفاعل وتنسيق الردود المحاسبية
+# 7. دالة معالجة التفاعل وتنسيق الردود المحاسبية مع الفحص الهندسي المباشر
 def handle_user_input(user_input: str):
     st.session_state.messages.append({"role": "user", "content": user_input})
     
@@ -173,7 +173,9 @@ def handle_user_input(user_input: str):
         ai_message = parsed.get("message_to_user", "تم الاستلام.")
         execution_notes = []
 
-        # [تعديل جذري هنا]: ضمان تنفيذ الحفظ لأي عملية ما عدا الاستعلام الصريح لتفادي مشكلة مسميات أنواع المعاملات
+        # طباعة شكل البيانات المُحللة فوراً لاكتشاف أي نقص أو خطأ في المفاتيح
+        execution_notes.append(f"🔍 **Debug Parsed:** `{parsed}`")
+
         if trans_type and trans_type != "QUERY" and InventoryService:
             try:
                 if parsed.get("is_installment") and InstallmentService:
@@ -199,9 +201,12 @@ def handle_user_input(user_input: str):
                     execution_notes.append(f"✅ {msg}\n💳 قسط: {rem_amt:,.2f} ج ({cust_name})")
                 else:
                     success, msg = InventoryService.execute_transaction(branch, parsed, user_input)
-                    execution_notes.append(f"✅ {msg}" if success else f"❌ خطأ الحفظ: {msg}")
+                    if success:
+                        execution_notes.append(f"✅ {msg}")
+                    else:
+                        execution_notes.append(f"❌ **خطأ الخدمة:** {msg}")
             except Exception as e:
-                execution_notes.append(f"⚠️ خطأ تنفيذ: {str(e)}")
+                execution_notes.append(f"🚨 **خطأ استثنائي:** `{str(e)}`")
 
         elif trans_type == "QUERY":
             if InventoryService:
@@ -230,7 +235,7 @@ def handle_user_input(user_input: str):
                 except Exception as ex:
                     execution_notes.append(f"⚠️ خطأ الأقساط: {str(ex)}")
 
-        # إذا كانت الشخصية "منجز"، يتم عرض المضمون باختصار شديد
+        # دمج النتيجة النهائية
         if st.session_state.persona == "mongez":
             response_text = "\n".join(execution_notes) if execution_notes else ai_message
         else:
