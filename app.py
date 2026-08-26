@@ -150,7 +150,7 @@ def process_and_display_chat(user_input):
             )
             
             if error or not parsed:
-                response_text = f"⚠️ عذراً، حدث خطأ: {error}"
+                response_text = f"⚠️ خطأ: {error}"
             else:
                 ai_message = parsed.get("message_to_user", "تم.")
                 execution_notes = []
@@ -167,15 +167,15 @@ def process_and_display_chat(user_input):
                             if success:
                                 execution_notes.append(f"✅ {msg}")
                             else:
-                                execution_notes.append(f"❌ خطأ: {msg}")
+                                execution_notes.append(f"❌ {msg}")
                         except Exception as e:
-                            execution_notes.append(f"🚨 خطأ برمجى: {str(e)}")
+                            execution_notes.append(f"🚨 خطأ: {str(e)}")
 
-                # تقصير الردود واختصارها تماماً في وضع منجز
-                if st.session_state.persona == "mongez":
-                    response_text = "\n".join(execution_notes) if execution_notes else ai_message
+                # تقصير تام وصارم للردود بدون أي مقدمات
+                if execution_notes:
+                    response_text = "\n".join(execution_notes)
                 else:
-                    response_text = f"{ai_message}\n\n" + "\n".join(execution_notes) if execution_notes else ai_message
+                    response_text = ai_message
 
             st.markdown(response_text)
             st.session_state.messages.append({"role": "assistant", "content": response_text})
