@@ -36,7 +36,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# 3. إدارة مفاتيح الـ API وتدويرها تلقائياً (الحفاظ على النظام الأصلي)
+# 3. إدارة مفاتيح الـ API وتدويرها تلقائياً
 API_KEYS_POOL = []
 if st and hasattr(st, "secrets") and st.secrets:
     for secret_key, val in st.secrets.items():
@@ -53,7 +53,7 @@ def get_next_api_key():
     st.session_state.api_key_index = (st.session_state.api_key_index + 1) % len(API_KEYS_POOL)
     return current_key
 
-def execute_with_key_rotation(user_input, branch, branch_rules, messages, persona="hantouf"):
+def execute_with_key_rotation(user_input, branch, branch_rules, messages, persona="mongez"):
     if not AIService:
         return None, "خدمة الذكاء الاصطناعي غير متوفرة."
     
@@ -65,7 +65,6 @@ def execute_with_key_rotation(user_input, branch, branch_rules, messages, person
             os.environ["GOOGLE_API_KEY"] = active_key
             os.environ["GEMINI_API_KEY"] = active_key
         try:
-            # دعم التمرير المرن لمنع اختلاف المسميات بين الإصدارات
             import inspect
             sig = inspect.signature(AIService.smart_process_command)
             kwargs = {}
@@ -91,8 +90,9 @@ def execute_with_key_rotation(user_input, branch, branch_rules, messages, person
                 break
     return None, last_error
 
-# 4. تفاصيل الشخصيات الأربع للذكاء الاصطناعي
+# 4. تفاصيل الشخصيات (تم إضافة شخصية منجز للعمل السريع المختصر)
 PERSONA_DETAILS = {
+    "mongez": {"name": "منجز (العملي السريع)", "avatar": "⚡", "desc": "إنجاز فوري بدون مقدمات أو رغي"},
     "hantouf": {"name": "حنتوف (المحاسب الصارم)", "avatar": "⚖️", "desc": "دقيق بالمليم وإنذارات مباشرة"},
     "barkawi": {"name": "بركاوي (المتفائل)", "avatar": "🤲", "desc": "يبدأ بالبركة ويركز على الرزق"},
     "kaeeb": {"name": "كئيب (الكوميديا السوداء)", "avatar": "🎭", "desc": "يُذكرك بالديون والالتزامات بأسلوب درامي"},
@@ -105,7 +105,7 @@ if "messages" not in st.session_state:
 if "ui_mode" not in st.session_state:
     st.session_state.ui_mode = "MINIMAL_VOICE"
 if "persona" not in st.session_state:
-    st.session_state.persona = "hantouf"
+    st.session_state.persona = "mongez"
 
 # 6. الشريط الجانبي (Sidebar) والإعدادات
 with st.sidebar:
@@ -152,10 +152,6 @@ with st.sidebar:
         else:
             st.success("لا توجد تنبيهات معلقة.")
 
-    if InventoryService and st.button("🔍 فحص الأصناف الراكدة"):
-        slow_items = InventoryService.check_slow_moving_items(branch)
-        st.info(f"تم فحص المخزون: وجد {len(slow_items)} صنف راكد.")
-
 current_avatar = PERSONA_DETAILS[st.session_state.persona]["avatar"]
 
 # 7. دالة معالجة التفاعل وتنسيق الردود المحاسبية
@@ -177,8 +173,8 @@ def handle_user_input(user_input: str):
         ai_message = parsed.get("message_to_user", "تم الاستلام.")
         execution_notes = []
 
-        # المعاملات (شراء/بيع/مرتجع/تعديل سعر/تقسيط)
-        if trans_type in ["PURCHASE", "SALE", "RETURN", "UPDATE_PRICE"] and InventoryService:
+        # [تعديل جذري هنا]: ضمان تنفيذ الحفظ لأي عملية ما عدا الاستعلام الصريح لتفادي مشكلة مسميات أنواع المعاملات
+        if trans_type and trans_type != "QUERY" and InventoryService:
             try:
                 if parsed.get("is_installment") and InstallmentService:
                     cust_name = parsed.get("supplier") or parsed.get("supplier_customer") or "عميل غير محدد"
@@ -200,14 +196,13 @@ def handle_user_input(user_input: str):
                         remaining_amount=rem_amt,
                         due_date=parsed.get("due_date", "غير محدد")
                     )
-                    execution_notes.append(f"✅ {msg}\n💳 تم جدولة المتبقي ({rem_amt:,.2f} ج.م) على العميل {cust_name}.")
+                    execution_notes.append(f"✅ {msg}\n💳 قسط: {rem_amt:,.2f} ج ({cust_name})")
                 else:
                     success, msg = InventoryService.execute_transaction(branch, parsed, user_input)
-                    execution_notes.append(f"✅ *{msg}*" if success else f"❌ *فشل الحفظ: {msg}*")
+                    execution_notes.append(f"✅ {msg}" if success else f"❌ خطأ الحفظ: {msg}")
             except Exception as e:
-                execution_notes.append(f"⚠️ *خطأ: {str(e)}*")
+                execution_notes.append(f"⚠️ خطأ تنفيذ: {str(e)}")
 
-        # الاستعلامات (عن المخزون أو الأقساط)
         elif trans_type == "QUERY":
             if InventoryService:
                 try:
@@ -227,28 +222,25 @@ def handle_user_input(user_input: str):
                     
                     inst_results = q_builder.execute()
                     if inst_results.data:
-                        inst_text = f"📋 **نتائج الأقساط ({branch}):**\n\n"
+                        inst_text = "📋 الأقساط:\n"
                         for row in inst_results.data:
                             due = row.get('due_date') or row.get('installment_date') or "غير محدد"
-                            inst_text += f"- **العميل:** {row.get('customer_name')} | **الصنف:** {row.get('item_name')} | **المتبقي:** {row.get('remaining_amount')} ج | 📅 **موعد القسط:** {due}\n"
+                            inst_text += f"- {row.get('customer_name')}: {row.get('remaining_amount')}ج (موعد: {due})\n"
                         execution_notes.append(inst_text)
-                    elif not execution_notes:
-                        execution_notes.append("🔍 لم يتم العثور على أقساط أو أصناف مطابقة.")
                 except Exception as ex:
-                    execution_notes.append(f"⚠️ خطأ استعلام الأقساط: {str(ex)}")
+                    execution_notes.append(f"⚠️ خطأ الأقساط: {str(ex)}")
 
-        if execution_notes:
-            response_text = f"{ai_message}\n\n" + "\n\n".join(execution_notes)
+        # إذا كانت الشخصية "منجز"، يتم عرض المضمون باختصار شديد
+        if st.session_state.persona == "mongez":
+            response_text = "\n".join(execution_notes) if execution_notes else ai_message
         else:
-            response_text = ai_message
+            response_text = f"{ai_message}\n\n" + "\n\n".join(execution_notes) if execution_notes else ai_message
 
     st.session_state.messages.append({"role": "assistant", "content": response_text})
 
-# 8. عرض الواجهة حسب النمط المختار
-
-# *** النمط الأول: الوضع البسيط الصوت السريع (Minimal Voice UI) ***
+# 8. عرض الواجهة
 if st.session_state.ui_mode == "MINIMAL_VOICE":
-    st.title(f"{current_avatar} المحاسب الذكي - نواة علي بابا (v3.0)")
+    st.title(f"{current_avatar} المحاسب الذكي - نواة علي بابا")
     st.caption(f"📍 الفرع: **{branch}** | 🎭 الشخصية: **{PERSONA_DETAILS[st.session_state.persona]['name']}**")
     
     for message in st.session_state.messages:
@@ -256,19 +248,14 @@ if st.session_state.ui_mode == "MINIMAL_VOICE":
         with st.chat_message(message["role"], avatar=avatar_icon):
             st.markdown(message["content"])
 
-    if user_input := st.chat_input("سجل معاملتك أو اسأل عن الأقساط والمخزون..."):
+    if user_input := st.chat_input("سجل معاملتك أو اسأل عن المخزون..."):
         handle_user_input(user_input)
         st.rerun()
-
-# *** النمط الثاني: اللوحة الكاملة (Full BI Dashboard) ***
 else:
     st.title(f"📊 المحاسب الذكي - لوحة تحليلات الأعمال ({branch})")
     
     main_tab, inv_tab, reports_tab, notif_tab = st.tabs([
-        "💬 الدردشة والمساعد الذكي", 
-        "📦 المخزون والدرج", 
-        "📊 التقارير والأقساط", 
-        "🔔 التنبيهات"
+        "💬 الدردشة", "📦 المخزون", "📊 التقارير", "🔔 التنبيهات"
     ])
     
     with main_tab:
@@ -277,43 +264,26 @@ else:
             with st.chat_message(message["role"], avatar=avatar_icon):
                 st.markdown(message["content"])
 
-        if user_input := st.chat_input("سجل معاملتك أو اسأل عن الأقساط والمخزون..."):
+        if user_input := st.chat_input("سجل معاملتك أو اسأل عن المخزون..."):
             handle_user_input(user_input)
             st.rerun()
 
     with inv_tab:
-        st.subheader("📦 رصيد المخزون الحالي (حسب متوسط التكلفة WAC)")
+        st.subheader("📦 رصيد المخزون الحالي")
         if InventoryService:
             success, inv_data = InventoryService.query_inventory(branch)
             st.markdown(inv_data)
-        else:
-            st.warning("خدمة المخزون غير متوفرة.")
 
     with reports_tab:
-        st.subheader("📊 لوحة التقارير والأقساط")
+        st.subheader("📊 لوحة التقارير")
         if InstallmentService:
             debts = InstallmentService.get_branch_debts_summary(branch)
-            if debts:
-                st.dataframe(debts)
-            else:
-                st.info("التقارير تعمل بشكل طبيعي، لا توجد ديون معلقة على عملاء هذا الفرع حالياً.")
-        else:
-            st.info("التقارير تعمل بشكل طبيعي، يمكنك متابعة المخازن واليومية من الجداول بالأسفل.")
+            if debts: st.dataframe(debts)
+            else: st.info("لا توجد ديون معلقة.")
 
     with notif_tab:
-        st.subheader("🔔 سجل الإشعارات اللحظية")
+        st.subheader("🔔 التنبيهات")
         if NotificationService:
             all_notifs = NotificationService.get_unread_notifications(branch)
-            if all_notifs:
-                for n in all_notifs:
-                    c1, c2 = st.columns([4, 1])
-                    with c1:
-                        st.write(f"**{n['title']}** - {n['message']}")
-                    with c2:
-                        if st.button("تم الاطلاع", key=f"notif_{n['id']}"):
-                            NotificationService.mark_as_read(n['id'])
-                            st.rerun()
-            else:
-                st.success("جميع الإشعارات مقروءة.")
-        else:
-            st.info("خدمة الإشعارات غير متوفرة.")
+            for n in all_notifs:
+                st.write(f"- {n['title']}: {n['message']}")
