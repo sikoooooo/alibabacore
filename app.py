@@ -35,7 +35,7 @@ for message in st.session_state.messages:
         st.markdown(message["content"])
 
 # استقبال مدخلات التاجر
-user_input = st.chat_input("اكتب أمرك هنا (مثلاً: تقرير المخزن، هات النواقص، مين عليه فلوس؟)...")
+user_input = st.chat_input("اكتب أمرك هنا (مثلاً: اشترينا 20 زيت، بعنا 5 سكر، تقرير المخزن)...")
 
 if user_input:
     # 1. عرض أمر المستخدم
@@ -43,9 +43,9 @@ if user_input:
     with st.chat_message("user"):
         st.markdown(user_input)
 
-    # 2. تحليل الطلب عبر الذكاء الاصطناعي (AIService) والشخصية المختارة
     user_input_clean = user_input.lower()
     
+    # 2. تحليل الطلب عبر الذكاء الاصطناعي
     with st.spinner("جاري تحليل المعاملة بواسطة التنين الذكي..."):
         ai_response = AIService.smart_process_command(
             user_text=user_input,
@@ -54,35 +54,53 @@ if user_input:
             chat_history=st.session_state.messages
         )
         
-        response_message = ai_response.get("message_to_user", "🤖 لم أفهم طلبك بدقة، هل يمكنك التوضيح؟")
+        response_message = ai_response.get("message_to_user", "🤖 تم استلام طلبك.")
         transactions = ai_response.get("transactions", [])
 
-        # 3. دمج الذكاء الاصطناعي مع دوال الخدمات القوية لديك عند وجود استعلامات خاصة
+        # 3. تفعيل الحفظ الشامل لكل أنواع المعاملات (شراء، بيع، إلخ)
         for tx in transactions:
             tx_type = tx.get("type")
+            item_name = tx.get("item_name")
             
-            if tx_type == "QUERY":
+            # معالجة الشراء (PURCHASE) أو البيع (SALE)
+            if tx_type in ["PURCHASE", "SALE"] and item_name and item_name != "غير محدد":
+                try:
+                    qty = float(tx.get("quantity", 1.0))
+                    price = float(tx.get("unit_price", 0.0))
+                    party_name = tx.get("supplier") or tx.get("customer", "عميل/مورد عام")
+                    
+                    res = InventoryService.process_transaction(
+                        branch=branch_name,
+                        item_name=item_name,
+                        quantity=qty,
+                        price=price,
+                        supplier=party_name,
+                        transaction_type=tx_type
+                    )
+                    
+                    if res.get("status") == "SUCCESS":
+                        response_message += f"\n\n✨ **[تم تسجيل وحفظ المعاملة في الداتابيز بنجاح]**"
+                    else:
+                        response_message += f"\n\n⚠️ **[تنبيه الحفظ]**: {res.get('message', 'خطأ غير معروف')}"
+                except Exception as e:
+                    response_message += f"\n\n❌ خطأ أثناء تنفيذ الحفظ: {str(e)}"
+
+            # معالجة الاستعلامات والتقارير الشاملة
+            elif tx_type == "QUERY":
                 if any(word in user_input_clean for word in ["مخزن", "بضاعة", "جرد", "رصيد", "الرصيد"]):
                     res = QueryService.get_comprehensive_report(branch_name, "inventory")
                     response_message += f"\n\n{res.get('message', '')}"
-                    
                 elif any(word in user_input_clean for word in ["أقساط", "قسط", "فلوس بره", "ديون", "متاخرات", "أجل"]):
                     res = QueryService.get_comprehensive_report(branch_name, "installments")
                     response_message += f"\n\n{res.get('message', '')}"
-                    
-                elif any(word in user_input_clean for word in ["موردين", "شركات", "عايزين فلوس", "مورد"]):
+                elif any(word in user_input_clean for word in ["موردين", "شركات", "مورد"]):
                     res = QueryService.get_comprehensive_report(branch_name, "suppliers")
                     response_message += f"\n\n{res.get('message', '')}"
-                    
-                elif any(word in user_input_clean for word in ["نواقص", "ناقص", "خلص", "بيخلص", "تنبيه", "إشعارات"]):
+                elif any(word in user_input_clean for word in ["نواقص", "ناقص", "خلص", "بيخلص", "تنبيه"]):
                     res = NotificationService.get_smart_alerts(branch_name)
                     response_message += f"\n\n{res.get('message', '')}"
 
-            elif tx_type == "UPDATE_CREDIT_LIMIT":
-                item_name = tx.get("item_name", "غير محدد")
-                response_message += f"\n\n✅ تم رصد طلب تحديث الحد الائتماني للعميل/المورد: **{item_name}**."
-
-    # 4. طباعة الرد للمستخدم بالشخصية المحاسبية
+    # 4. طباعة رد المساعد بالشخصية
     with st.chat_message("assistant"):
         st.markdown(response_message)
     
