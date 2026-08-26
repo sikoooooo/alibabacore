@@ -53,6 +53,35 @@ class InstallmentService:
             return {"is_exceeded": False, "warning_message": ""}
 
     @classmethod
+    def set_customer_credit_limit(cls, customer_name: str, new_limit: float, branch: str) -> Dict[str, Any]:
+        """تحديث أو إدراج الحد الائتماني للعميل مباشرة من واجهة الشات دون الحاجة للوحة تحكم Supabase."""
+        supabase = get_supabase_client()
+        if not supabase:
+            return {"status": "ERROR", "message": "قاعدة البيانات غير متوفرة."}
+        
+        try:
+            existing = supabase.table("customer_credit_limits").select("id").eq("customer_name", customer_name).execute()
+            
+            payload = {
+                "customer_name": customer_name,
+                "credit_limit": new_limit,
+                "branch": branch
+            }
+            
+            if existing.data:
+                supabase.table("customer_credit_limits").update({"credit_limit": new_limit}).eq("customer_name", customer_name).execute()
+            else:
+                supabase.table("customer_credit_limits").insert(payload).execute()
+                
+            return {
+                "status": "SUCCESS",
+                "message": f"✅ تم تحديث الحد الائتماني للعميل '{customer_name}' ليصبح {new_limit:,.2f} ج.م بنجاح."
+            }
+        except Exception as e:
+            print(f"Set credit limit error: {e}")
+            return {"status": "ERROR", "message": f"حدث خطأ أثناء تحديث الحد الائتماني: {str(e)}"}
+
+    @classmethod
     def record_installment(cls, transaction_id: str, branch: str, customer_name: str, 
                            total_amount: float, down_payment: float, remaining_amount: float, 
                            due_date: str) -> Dict[str, Any]:
@@ -131,4 +160,20 @@ class InstallmentService:
             return res.data or []
         except Exception as e:
             print(f"Get debts summary error: {e}")
+            return []
+
+    @classmethod
+    def get_monthly_installments_with_arrears(cls, branch: str, customer_name: Optional[str] = None) -> List[Dict[str, Any]]:
+        """جلب الأقساط المستحقة والمتراكمة (القديمة والجديدة مجمعة تحت اسم العميل مع ترحيل المتأخرات)."""
+        supabase = get_supabase_client()
+        if not supabase: return []
+        try:
+            query = supabase.table("installments").select("*").eq("branch", branch).neq("status", "PAID")
+            if customer_name:
+                query = query.eq("customer_name", customer_name)
+            
+            res = query.order("due_date", desc=False).execute()
+            return res.data or []
+        except Exception as e:
+            print(f"Error fetching installments with arrears: {e}")
             return []
