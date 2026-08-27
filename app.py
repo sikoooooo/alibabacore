@@ -57,7 +57,7 @@ if user_input:
         response_message = ai_response.get("message_to_user", "🤖 تم استلام طلبك.")
         transactions = ai_response.get("transactions", [])
 
-        # 3. تفعيل الحفظ الشامل لكل أنواع المعاملات مع تمرير الوحدة بدقة
+        # 3. تفعيل الحفظ الشامل لكل أنواع المعاملات مع تمرير الوحدة ومعامل التحويل بدقة
         for tx in transactions:
             tx_type = tx.get("type")
             item_name = tx.get("item_name")
@@ -68,6 +68,8 @@ if user_input:
                     qty = float(tx.get("quantity", 1.0))
                     price = float(tx.get("unit_price", 0.0))
                     unit_val = tx.get("unit") or tx.get("major_unit") or "وحدة"
+                    minor_unit_val = tx.get("minor_unit")
+                    conv_factor = float(tx.get("conversion_factor", 1.0))
                     party_name = tx.get("supplier") or tx.get("customer", "عميل/مورد عام")
                     
                     res = InventoryService.process_transaction(
@@ -77,11 +79,13 @@ if user_input:
                         price=price,
                         supplier=party_name,
                         transaction_type=tx_type,
-                        unit=unit_val
+                        unit=unit_val,
+                        minor_unit=minor_unit_val,
+                        conversion_factor=conv_factor
                     )
                     
                     if res.get("status") == "SUCCESS":
-                        response_message += f"\n\n✨ **[تم تسجيل وحفظ المعاملة ووحدة القياس ({unit_val}) في الداتابيز بنجاح]**"
+                        response_message += f"\n\n✨ **[تم تسجيل المعاملة وحفظ الوحدة ({minor_unit_val or unit_val}) ومعامل التحويل في الداتابيز بنجاح]**"
                     else:
                         response_message += f"\n\n⚠️ **[تنبيه الحفظ]**: {res.get('message', 'خطأ غير معروف')}"
                 except Exception as e:
