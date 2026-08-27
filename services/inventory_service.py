@@ -3,20 +3,59 @@ from core.database import get_supabase_client
 
 class InventoryService:
     @classmethod
-    def process_transaction(cls, branch: str, item_name: str, quantity: float, price: float, supplier: str, transaction_type: str) -> dict:
+    def process_transaction(cls, branch: str, item_name: str, quantity: float, price: float, supplier: str, transaction_type: str, unit: str = "وحدة") -> dict:
         supabase = get_supabase_client()
         if not supabase:
             return {"status": "ERROR", "message": "قاعدة البيانات غير متوفرة."}
         try:
-            data = {
+            # 1. تسجيل الحركة الأصلية في جدول transactions
+            tx_data = {
                 "branch": branch,
                 "item_name": item_name,
                 "quantity": quantity,
                 "unit_price": price,
                 "supplier": supplier,
-                "type": transaction_type
+                "type": transaction_type,
+                "unit": unit
             }
-            supabase.table("transactions").insert(data).execute()
+            supabase.table("transactions").insert(tx_data).execute()
+
+            # 2. البحث عن معامل التحويل للوحدة من جدول item_units إن وجد لضمان دقة الوحدة الكبرى والصغرى
+            conversion_factor = 1.0
+            try:
+                unit_check = supabase.table("item_units").select("conversion_factor").ilike("item_name", f"%{item_name}%").eq("unit_name", unit).limit(1).execute()
+                if unit_check.data:
+                    conversion_factor = float(unit_check.data[0].get("conversion_factor", 1.0))
+            except Exception:
+                pass
+
+            # حساب الكمية بالوحدة الأساسية (الصغرى)
+            base_quantity_change = quantity * conversion_factor
+            multiplier = 1 if transaction_type == "PURCHASE" else -1
+            net_change = base_quantity_change * multiplier
+
+            # 3. تحديث جدول inventory للفرع
+            existing = supabase.table("inventory").select("*").eq("branch", branch).ilike("item_name", f"%{item_name}%").execute()
+            
+            if existing.data:
+                row = existing.data[0]
+                current_qty = float(row.get("total_base_quantity", 0) or 0)
+                new_qty = current_qty + net_change
+                
+                supabase.table("inventory").update({
+                    "total_base_quantity": new_qty,
+                    "major_unit": unit
+                }).eq("id", row["id"]).execute()
+            else:
+                new_row = {
+                    "branch": branch,
+                    "item_name": item_name,
+                    "total_base_quantity": net_change,
+                    "major_unit": unit,
+                    "avg_cost_per_base": price / conversion_factor if conversion_factor > 0 else price
+                }
+                supabase.table("inventory").insert(new_row).execute()
+
             return {"status": "SUCCESS"}
         except Exception as e:
             return {"status": "ERROR", "message": str(e)}
