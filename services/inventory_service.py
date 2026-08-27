@@ -3,32 +3,36 @@ from core.database import get_supabase_client
 
 class InventoryService:
     @classmethod
-    def process_transaction(cls, branch: str, item_name: str, quantity: float, price: float, supplier: str, transaction_type: str, unit: str = "وحدة") -> dict:
+    def process_transaction(cls, branch: str, item_name: str, quantity: float, price: float, supplier: str, transaction_type: str, unit: str = "وحدة", minor_unit: str = None, conversion_factor: float = 1.0) -> dict:
         supabase = get_supabase_client()
         if not supabase:
             return {"status": "ERROR", "message": "قاعدة البيانات غير متوفرة."}
         try:
-            # لو الـ AI جاب الوحدة (طبق)، نعتمدها فوراً
             actual_unit = unit if unit and unit != "غير محدد" else "وحدة"
+            conv = float(conversion_factor) if conversion_factor and conversion_factor > 0 else 1.0
+            
+            # الكمية الفعالة بالوحدة الصغرى أو الأساسية
+            effective_qty = quantity * conv
+            recorded_unit = minor_unit if minor_unit and minor_unit != "غير محدد" else actual_unit
 
-            # 1. تسجيل الحركة في جدول transactions بالوحدة الصحيحة تماماً
+            # 1. تسجيل الحركة في جدول transactions
             tx_data = {
                 "branch": branch,
                 "item_name": item_name,
                 "quantity": quantity,
-                "unit_price": price,
+                "unit_price": price / conv if conv > 1 else price,
                 "supplier": supplier,
                 "type": transaction_type,
-                "unit": actual_unit
+                "unit": recorded_unit
             }
             supabase.table("transactions").insert(tx_data).execute()
 
-            # 2. ضمان إنشاء قيد يومي تلقائي في جدول journal_entries بدون أخطاء
+            # 2. إنشاء قيد يومي تلقائي في journal_entries
             total_val = quantity * price
             desc_text = f"مشتريات {item_name} ({quantity} {actual_unit})" if transaction_type == "PURCHASE" else f"مبيعات {item_name} ({quantity} {actual_unit})"
             
             journal_data = {
-                "branch": branch,  # متوافق مع اسم العمود في الداتابيز عندك
+                "branch": branch,
                 "description": desc_text,
                 "total_amount": total_val if total_val > 0 else 0.0
             }
@@ -37,25 +41,28 @@ class InventoryService:
             except Exception as je:
                 print(f"Journal entry log error: {je}")
 
-            # 3. تحديث أو إدراج المخزن بالوحدة الصحيحة بدقة
+            # 3. تحديث أو إدراج المخزن
+            multiplier = 1 if transaction_type == "PURCHASE" else -1
+            net_change = effective_qty * multiplier
+
             existing = supabase.table("inventory").select("*").eq("branch", branch).ilike("item_name", f"%{item_name}%").execute()
             
             if existing.data:
                 row = existing.data[0]
                 current_qty = float(row.get("total_base_quantity", 0) or 0)
-                new_qty = current_qty + quantity
+                new_qty = current_qty + net_change
                 
                 supabase.table("inventory").update({
                     "total_base_quantity": new_qty,
-                    "major_unit": actual_unit
+                    "major_unit": recorded_unit
                 }).eq("id", row["id"]).execute()
             else:
                 new_row = {
                     "branch": branch,
                     "item_name": item_name,
-                    "total_base_quantity": quantity,
-                    "major_unit": actual_unit,
-                    "avg_cost_per_base": price
+                    "total_base_quantity": net_change,
+                    "major_unit": recorded_unit,
+                    "avg_cost_per_base": price / conv if conv > 0 else price
                 }
                 supabase.table("inventory").insert(new_row).execute()
 
