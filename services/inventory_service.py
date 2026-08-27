@@ -1,6 +1,7 @@
 from typing import Dict, Any
 from core.database import get_supabase_client
 
+class InventoryService:
     @classmethod
     def process_transaction(cls, branch: str, item_name: str, quantity: float, price: float, supplier: str, transaction_type: str, unit: str = "وحدة") -> dict:
         supabase = get_supabase_client()
