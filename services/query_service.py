@@ -15,11 +15,11 @@ class QueryService:
             
         try:
             if report_type == "inventory":
-                res = supabase.table("inventory").select("item_name, quantity, average_cost").eq("branch", branch).execute()
+                res = supabase.table("inventory").select("item_name, total_base_quantity, avg_cost_per_base, major_unit").eq("branch", branch).execute()
                 if not res.data:
                     return {"status": "SUCCESS", "message": "المخزن فارغ حالياً."}
                 
-                items = [f"- {i['item_name']} (الكمية: {i['quantity']}, السعر: {i['average_cost']}ج)" for i in res.data]
+                items = [f"- {i['item_name']} (الرصيد: {i['total_base_quantity']} {i.get('major_unit', 'وحدة')}, التكلفة: {i['avg_cost_per_base']}ج)" for i in res.data]
                 return {
                     "status": "SUCCESS",
                     "type": "inventory",
