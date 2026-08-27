@@ -1,14 +1,16 @@
 from typing import Dict, Any
 from core.database import get_supabase_client
 
-class InventoryService:
-    @classmethod
+@classmethod
     def process_transaction(cls, branch: str, item_name: str, quantity: float, price: float, supplier: str, transaction_type: str, unit: str = "وحدة") -> dict:
         supabase = get_supabase_client()
         if not supabase:
             return {"status": "ERROR", "message": "قاعدة البيانات غير متوفرة."}
         try:
-            # 1. تسجيل الحركة الأصلية في جدول transactions
+            # لو جاي فاضية من الـ AI، نثبتها على القيمة الحقيقية الواردة
+            actual_unit = unit if unit and unit != "غير محدد" else "وحدة"
+
+            # 1. تسجيل الحركة في جدول transactions بالوحدة الصحيحة
             tx_data = {
                 "branch": branch,
                 "item_name": item_name,
@@ -16,25 +18,37 @@ class InventoryService:
                 "unit_price": price,
                 "supplier": supplier,
                 "type": transaction_type,
-                "unit": unit
+                "unit": actual_unit
             }
             supabase.table("transactions").insert(tx_data).execute()
 
-            # 2. البحث عن معامل التحويل للوحدة من جدول item_units إن وجد لضمان دقة الوحدة الكبرى والصغرى
+            # 2. إنشاء قيد يومي تلقائي في جدول journal_entries عشان ميفضلش فاضي
+            total_val = quantity * price
+            desc_text = f"مشتريات {item_name} ({quantity} {actual_unit})" if transaction_type == "PURCHASE" else f"مبيعات {item_name} ({quantity} {actual_unit})"
+            
+            journal_data = {
+                "branch_id": branch,  # أو الـ UUID الخاص بالفرع حسب تصميم جدولك
+                "description": desc_text,
+                "total_amount": total_val if total_val > 0 else None
+            }
+            try:
+                supabase.table("journal_entries").insert(journal_data).execute()
+            except Exception as je:
+                print(f"Journal entry log error: {je}")
+
+            # 3. تحديث المخزن بالوحدة الأساسية الصحيحة
             conversion_factor = 1.0
             try:
-                unit_check = supabase.table("item_units").select("conversion_factor").ilike("item_name", f"%{item_name}%").eq("unit_name", unit).limit(1).execute()
+                unit_check = supabase.table("item_units").select("conversion_factor").ilike("item_name", f"%{item_name}%").eq("unit_name", actual_unit).limit(1).execute()
                 if unit_check.data:
                     conversion_factor = float(unit_check.data[0].get("conversion_factor", 1.0))
             except Exception:
                 pass
 
-            # حساب الكمية بالوحدة الأساسية (الصغرى)
             base_quantity_change = quantity * conversion_factor
             multiplier = 1 if transaction_type == "PURCHASE" else -1
             net_change = base_quantity_change * multiplier
 
-            # 3. تحديث جدول inventory للفرع
             existing = supabase.table("inventory").select("*").eq("branch", branch).ilike("item_name", f"%{item_name}%").execute()
             
             if existing.data:
@@ -44,14 +58,14 @@ class InventoryService:
                 
                 supabase.table("inventory").update({
                     "total_base_quantity": new_qty,
-                    "major_unit": unit
+                    "major_unit": actual_unit
                 }).eq("id", row["id"]).execute()
             else:
                 new_row = {
                     "branch": branch,
                     "item_name": item_name,
                     "total_base_quantity": net_change,
-                    "major_unit": unit,
+                    "major_unit": actual_unit,
                     "avg_cost_per_base": price / conversion_factor if conversion_factor > 0 else price
                 }
                 supabase.table("inventory").insert(new_row).execute()
