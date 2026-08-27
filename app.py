@@ -67,7 +67,6 @@ if user_input:
                 try:
                     qty = float(tx.get("quantity", 1.0))
                     price = float(tx.get("unit_price", 0.0))
-                    # التقاط الوحدة المستخرجة أو تعيين قيمة افتراضية مناسبة
                     unit_val = tx.get("unit") or tx.get("major_unit") or "وحدة"
                     party_name = tx.get("supplier") or tx.get("customer", "عميل/مورد عام")
                     
@@ -78,7 +77,7 @@ if user_input:
                         price=price,
                         supplier=party_name,
                         transaction_type=tx_type,
-                        unit=unit_val  # تمرير الوحدة الصحيحة (مثل طن، كرتونة)
+                        unit=unit_val
                     )
                     
                     if res.get("status") == "SUCCESS":
