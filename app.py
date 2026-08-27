@@ -35,7 +35,7 @@ for message in st.session_state.messages:
         st.markdown(message["content"])
 
 # استقبال مدخلات التاجر
-user_input = st.chat_input("اكتب أمرك هنا (مثلاً: اشترينا 20 زيت، بعنا 5 سكر، تقرير المخزن)...")
+user_input = st.chat_input("اكتب أمرك هنا (مثلاً: اشترينا 20 طن حديد، بعنا 5 كرتونة زيت)...")
 
 if user_input:
     # 1. عرض أمر المستخدم
@@ -57,7 +57,7 @@ if user_input:
         response_message = ai_response.get("message_to_user", "🤖 تم استلام طلبك.")
         transactions = ai_response.get("transactions", [])
 
-        # 3. تفعيل الحفظ الشامل لكل أنواع المعاملات (شراء، بيع، إلخ)
+        # 3. تفعيل الحفظ الشامل لكل أنواع المعاملات مع تمرير الوحدة بدقة
         for tx in transactions:
             tx_type = tx.get("type")
             item_name = tx.get("item_name")
@@ -67,6 +67,8 @@ if user_input:
                 try:
                     qty = float(tx.get("quantity", 1.0))
                     price = float(tx.get("unit_price", 0.0))
+                    # التقاط الوحدة المستخرجة أو تعيين قيمة افتراضية مناسبة
+                    unit_val = tx.get("unit") or tx.get("major_unit") or "وحدة"
                     party_name = tx.get("supplier") or tx.get("customer", "عميل/مورد عام")
                     
                     res = InventoryService.process_transaction(
@@ -75,11 +77,12 @@ if user_input:
                         quantity=qty,
                         price=price,
                         supplier=party_name,
-                        transaction_type=tx_type
+                        transaction_type=tx_type,
+                        unit=unit_val  # تمرير الوحدة الصحيحة (مثل طن، كرتونة)
                     )
                     
                     if res.get("status") == "SUCCESS":
-                        response_message += f"\n\n✨ **[تم تسجيل وحفظ المعاملة في الداتابيز بنجاح]**"
+                        response_message += f"\n\n✨ **[تم تسجيل وحفظ المعاملة ووحدة القياس ({unit_val}) في الداتابيز بنجاح]**"
                     else:
                         response_message += f"\n\n⚠️ **[تنبيه الحفظ]**: {res.get('message', 'خطأ غير معروف')}"
                 except Exception as e:
