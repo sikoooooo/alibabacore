@@ -28,12 +28,15 @@ class ImportService:
             
             for index, row in df.iterrows():
                 try:
+                    item_qty = float(row.get("quantity", 0))
+                    item_cost = float(row.get("cost", row.get("price", 0))) if ("cost" in df.columns or "price" in df.columns) and pd.notna(row.get("cost", row.get("price"))) else 0.0
+                    
                     item_data = {
                         "branch": branch,
                         "item_name": str(row.get("item_name", "")).strip(),
-                        "quantity": float(row.get("quantity", 0)),
-                        "price": float(row.get("price", 0)),
-                        "cost": float(row.get("cost", 0)) if "cost" in df.columns and pd.notna(row.get("cost")) else 0.0,
+                        "total_base_quantity": item_qty,
+                        "avg_cost_per_base": item_cost,
+                        "major_unit": str(row.get("unit", "وحدة")).strip(),
                         "supplier": str(row.get("supplier", "")).strip() if "supplier" in df.columns and pd.notna(row.get("supplier")) else "غير محدد",
                         "brand": str(row.get("brand", "")).strip() if "brand" in df.columns and pd.notna(row.get("brand")) else "غير محدد"
                     }
@@ -41,7 +44,7 @@ class ImportService:
                     if not item_data["item_name"]:
                         continue
                         
-                    # إدخال الصنف إلى جدول المخزن
+                    # إدخال الصنف إلى جدول المخزن بالأسماء الصح للأعمدة
                     supabase.table("inventory").insert(item_data).execute()
                     imported_count += 1
                     
