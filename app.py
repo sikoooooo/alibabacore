@@ -85,9 +85,9 @@ if user_input:
                         supabase = get_supabase_client()
                         if supabase:
                             # 1. التأكد من إنشاء العميل في جدول العملاء (customers) إذا لم يكن موجوداً
-                            existing_cust = supabase.table("customers").select("id").eq("name", party_name).execute()
+                            existing_cust = supabase.table("customers").select("id").eq("customer_name", party_name).execute()
                             if not existing_cust.data:
-                                supabase.table("customers").insert({"name": party_name, "branch": branch_name}).execute()
+                                supabase.table("customers").insert({"customer_name": party_name, "branch": branch_name}).execute()
                         
                         # 2. فحص الحد الائتماني للعميل مع المرونة (لا نمنع البيع، بل نحدث الحد تلقائياً وننبه التاجر)
                         credit_check = InstallmentService.check_customer_credit(party_name, remaining_amount)
