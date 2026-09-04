@@ -81,24 +81,32 @@ if user_input:
                         down_payment = float(tx.get("down_payment", 400.0))
                         remaining_amount = total_amount - down_payment
                         
-                        # استخراج قيمة القسط الشهري إن وجد، أو تخمينه افتراضياً
+                        # استخراج قيمة القسط الشهري
                         installment_value = float(tx.get("installment_value", 150.0))
+                        initial_limit = max(10000.0, total_amount)
                         
                         supabase = get_supabase_client()
                         if supabase:
-                            # 1. التأكد من إنشاء العميل في جدول customers
+                            # 1. التأكد من إنشاء العميل أو تحديثه في جدول customers مع الحد الائتماني
                             existing_cust = supabase.table("customers").select("id").eq("customer_name", party_name).execute()
                             if not existing_cust.data:
-                                supabase.table("customers").insert({"customer_name": party_name, "branch": branch_name}).execute()
+                                supabase.table("customers").insert({
+                                    "customer_name": party_name, 
+                                    "branch": branch_name
+                                }).execute()
                             
-                            # 2. التأكد من تسجيل العميل في جدول customer_credit_limits
+                            # 2. التأكد من تسجيل أو تحديث الحد الائتماني للعميل في جدول customer_credit_limits والـ customers معاً
                             existing_limit = supabase.table("customer_credit_limits").select("id").eq("customer_name", party_name).execute()
                             if not existing_limit.data:
-                                initial_limit = max(10000.0, total_amount)
                                 supabase.table("customer_credit_limits").insert({
                                     "customer_name": party_name,
-                                    "credit_limit": initial_limit
+                                    "credit_limit": initial_limit,
+                                    "branch": branch_name
                                 }).execute()
+                            else:
+                                supabase.table("customer_credit_limits").update({
+                                    "credit_limit": initial_limit
+                                }).eq("customer_name", party_name).execute()
                         
                         # 3. فحص الحد الائتماني للعميل
                         credit_check = InstallmentService.check_customer_credit(party_name, remaining_amount)
@@ -153,7 +161,7 @@ if user_input:
                                 f"- الصنف: {item_name} (الكمية: {qty} {unit_val})\n"
                                 f"- إجمالي الفاتورة: {total_amount:,.2f} ج.م (المقدم: {down_payment:,.2f} ج.م)\n"
                                 f"- قيمة القسط الشهري: {installment_value:,.2f} ج.م\n"
-                                f"- تم إيداع المقدم بالخزينة وترحيل المتبقي لجدول الأقساط."
+                                f"- تم إيداع المقدم بالخزينة وتحديث حد العميل وترحيل المتبقي للأقساط."
                             )
                         else:
                             action_results.append("⚠️ حدث خطأ في جدولة الأقساط بقاعدة البيانات.")
