@@ -105,7 +105,7 @@ class InstallmentService:
             return res.data[0] if res.data else {}
         except Exception as e:
             print(f"Record installment error: {e}")
-            return {}
+            raise Exception(f"خطأ Supabase الفعلي في الأقساط: {str(e)}")
 
     @classmethod
     def process_payment(cls, customer_name: str, payment_amount: float, branch: str) -> Dict[str, Any]:
