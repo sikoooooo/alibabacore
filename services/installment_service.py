@@ -177,3 +177,25 @@ class InstallmentService:
         except Exception as e:
             print(f"Error fetching installments with arrears: {e}")
             return []
+
+    @classmethod
+    def get_due_installments_for_alerts(cls, branch: str) -> List[Dict[str, Any]]:
+        """جلب الأقساط المستحقة والمتأخرة التي لم تُسدد بعد (من الأيام السابقة وحتى اليوم) لعرضها في الإشعارات."""
+        supabase = get_supabase_client()
+        if not supabase: return []
+        try:
+            from datetime import date
+            today_str = date.today().isoformat()
+            
+            res = supabase.table("installments") \
+                .select("*") \
+                .eq("branch", branch) \
+                .neq("status", "PAID") \
+                .lte("due_date", today_str) \
+                .order("due_date", desc=False) \
+                .execute()
+                
+            return res.data or []
+        except Exception as e:
+            print(f"Error fetching due installments for alerts: {e}")
+            return []
