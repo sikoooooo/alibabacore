@@ -39,13 +39,18 @@ class InventoryService:
             }
             supabase.table("transactions").insert(tx_data).execute()
 
-            # تحديد هل البند مصروف أو أصل ثابت
-            is_expense_or_asset = any(keyword in item_name.lower() for keyword in ["رواتب", "صيانة", "قرض", "أصل", "جهاز", "مرتبات"])
+            # تحديد هل البند مصروف تشغيلي أو أصل ثابت بدقة تامة ومنع الدمج
+            is_expense = any(keyword in item_name.lower() for keyword in ["رواتب", "صيانة", "مرتبات", "إيجار", "كهرباء", "مياه"])
+            is_asset = any(keyword in item_name.lower() for keyword in ["أصل", "جهاز", "معدة", "سيارة", "أثاث"])
 
-            # 2. إنشاء قيد يومي تلقائي دقيق في journal_entries
-            if transaction_type == "PURCHASE" and is_expense_or_asset:
-                desc_text = f"مصروفات/أصول: {item_name} ({quantity} {actual_unit})"
-                debit_acc = item_name
+            # 2. إنشاء قيد يومي مزدوج دقيق في journal_entries بفصل المصروفات عن الأصول
+            if transaction_type == "PURCHASE" and is_expense:
+                desc_text = f"مصروف تشغيلي: {item_name} ({quantity} {actual_unit})"
+                debit_acc = f"حساب المصروفات ({item_name})"
+                credit_acc = "الخزينة/البنك"
+            elif transaction_type == "PURCHASE" and is_asset:
+                desc_text = f"شراء أصل ثابت: {item_name} ({quantity} {actual_unit})"
+                debit_acc = f"حساب الأصول الثابتة ({item_name})"
                 credit_acc = "الخزينة/البنك"
             elif transaction_type == "PURCHASE":
                 desc_text = f"مشتريات بضاعة {item_name} ({quantity} {actual_unit})"
@@ -73,11 +78,10 @@ class InventoryService:
                 treasury_type = "OUTFLOW" if transaction_type == "PURCHASE" else "INFLOW"
                 
                 # تحديد الوصف والتصنيف المالي الصحيح
-                if is_expense_or_asset:
-                    if any(w in item_name.lower() for keyword in ["رواتب", "مرتبات", "صيانة", "إيجار", "كهرباء", "مياه"] for w in [keyword]):
-                        treasury_desc = f"مصروفات تشغيلية: {item_name}"
-                    else:
-                        treasury_desc = f"شراء أصل ثابت: {item_name}"
+                if is_expense:
+                    treasury_desc = f"مصروفات تشغيلية: {item_name}"
+                elif is_asset:
+                    treasury_desc = f"شراء أصل ثابت: {item_name}"
                 else:
                     treasury_desc = f"{transaction_type} - {item_name}"
 
@@ -93,7 +97,7 @@ class InventoryService:
                     print(f"Treasury ledger log error: {te}")
 
             # 3. تحديث أو إدراج المخزن (فقط لو لم تكن مصروفات أو أصول أو قروض خدمية)
-            if not is_expense_or_asset:
+            if not (is_expense or is_asset):
                 multiplier = 1 if transaction_type == "PURCHASE" else -1
                 net_change = effective_qty * multiplier
 
