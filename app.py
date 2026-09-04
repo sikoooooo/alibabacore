@@ -7,22 +7,12 @@ from services.query_service import QueryService
 
 st.set_page_config(page_title="التنين - المساعد المحاسبي", page_icon="🐉", layout="centered")
 
-st.title("🐉 نظام التنين المحاسبي الذكي")
-st.write("مرحباً بك يا باشا، المساعد الذكي لإدارة المخزن، الفروع، النواقص، والأقساط تحت أمرك.")
+st.title("🐉 نظام التنين المحاسبي الصارم")
+st.write("النظام المحاسبي المباشر لإدارة المعاملات، المخزن، والموردين بدون شخصيات وهمية لتوفير استهلاك الـ API.")
 
-# اختيار الشخصية المحاسبية من الشريط الجانبي
+# إعدادات النظام بالجانب بدون شخصيات
 with st.sidebar:
-    st.header("⚙️ إعدادات التنين")
-    selected_persona = st.selectbox(
-        "اختر شخصية المحاسب:",
-        options=["hantouf", "barkawi", "kaeeb", "funny"],
-        format_func=lambda x: {
-            "hantouf": "💼 حنتوف (الصارم الدقيق)",
-            "barkawi": "🤲 بركاوي (المتفائل بالرزق)",
-            "kaeeb": "📉 كئيب (الكوميديا السوداء والديون)",
-            "funny": "😄 الفرفوش المضحك"
-        }[x]
-    )
+    st.header("⚙️ إعدادات النظام")
     branch_name = st.text_input("اسم الفرع:", value="الفرع الرئيسي")
 
 # إعداد الجلسة للمحادثة
@@ -45,24 +35,23 @@ if user_input:
 
     user_input_clean = user_input.lower()
     
-    # 2. تحليل الطلب عبر الذكاء الاصطناعي
-    with st.spinner("جاري تحليل المعاملة بواسطة التنين الذكي..."):
+    # 2. تحليل الطلب وتحديد نوع المعاملة باختصار مهني صارم
+    with st.spinner("جاري تنفيذ المعاملة..."):
         ai_response = AIService.smart_process_command(
             user_text=user_input,
             branch=branch_name,
-            persona=selected_persona,
+            persona="professional", # وضع مهني محايد
             chat_history=st.session_state.messages
         )
         
-        response_message = ai_response.get("message_to_user", "🤖 تم استلام طلبك.")
         transactions = ai_response.get("transactions", [])
+        action_results = []
 
-        # 3. تفعيل الحفظ الشامل لكل أنواع المعاملات مع تمرير الوحدة ومعامل التحويل بدقة
+        # 3. معالجة وحفظ المعاملات وإظهار الرد المباشر المخصص
         for tx in transactions:
             tx_type = tx.get("type")
             item_name = tx.get("item_name")
             
-            # معالجة الشراء (PURCHASE) أو البيع (SALE)
             if tx_type in ["PURCHASE", "SALE"] and item_name and item_name != "غير محدد":
                 try:
                     qty = float(tx.get("quantity", 1.0))
@@ -85,28 +74,38 @@ if user_input:
                     )
                     
                     if res.get("status") == "SUCCESS":
-                        response_message += f"\n\n✨ **[تم تسجيل المعاملة وحفظ الوحدة ({minor_unit_val or unit_val}) ومعامل التحويل في الداتابيز بنجاح]**"
+                        action_results.append(f"✅ تم الحفظ - {('مبيعات' if tx_type == 'SALE' else 'مشتريات')}: {item_name} (الكمية: {qty} {unit_val})")
                     else:
-                        response_message += f"\n\n⚠️ **[تنبيه الحفظ]**: {res.get('message', 'خطأ غير معروف')}"
+                        action_results.append(f"⚠️ تنبيه - فشل الحفظ: {res.get('message', 'خطأ غير معروف')}")
                 except Exception as e:
-                    response_message += f"\n\n❌ خطأ أثناء تنفيذ الحفظ: {str(e)}"
+                    action_results.append(f"❌ خطأ تنفيذ: {str(e)}")
+
+            # مصاريف أو بنود أخرى إن وجدت
+            elif tx_type == "EXPENSE":
+                action_results.append(f"✅ تم الحفظ - مصروفات: {item_name}")
 
             # معالجة الاستعلامات والتقارير الشاملة
             elif tx_type == "QUERY":
                 if any(word in user_input_clean for word in ["مخزن", "بضاعة", "جرد", "رصيد", "الرصيد"]):
                     res = QueryService.get_comprehensive_report(branch_name, "inventory")
-                    response_message += f"\n\n{res.get('message', '')}"
+                    action_results.append(res.get('message', ''))
                 elif any(word in user_input_clean for word in ["أقساط", "قسط", "فلوس بره", "ديون", "متاخرات", "أجل"]):
                     res = QueryService.get_comprehensive_report(branch_name, "installments")
-                    response_message += f"\n\n{res.get('message', '')}"
+                    action_results.append(res.get('message', ''))
                 elif any(word in user_input_clean for word in ["موردين", "شركات", "مورد"]):
                     res = QueryService.get_comprehensive_report(branch_name, "suppliers")
-                    response_message += f"\n\n{res.get('message', '')}"
+                    action_results.append(res.get('message', ''))
                 elif any(word in user_input_clean for word in ["نواقص", "ناقص", "خلص", "بيخلص", "تنبيه"]):
                     res = NotificationService.get_smart_alerts(branch_name)
-                    response_message += f"\n\n{res.get('message', '')}"
+                    action_results.append(res.get('message', ''))
 
-    # 4. طباعة رد المساعد بالشخصية
+        # تجهيز الرد المهني المباشر
+        if action_results:
+            response_message = "\n\n".join(action_results)
+        else:
+            response_message = ai_response.get("message_to_user", "✅ تم تنفيذ العملية بنجاح.")
+
+    # 4. طباعة الرد المباشر الصارم
     with st.chat_message("assistant"):
         st.markdown(response_message)
     
