@@ -81,22 +81,23 @@ class InstallmentService:
             return {"status": "ERROR", "message": f"حدث خطأ أثناء تحديث الحد الائتماني: {str(e)}"}
 
     @classmethod
-    def record_installment(cls, transaction_id: str, branch: str, customer_name: str, 
+    def record_installment(cls, branch: str, customer_name: str, item_name: str,
                            total_amount: float, down_payment: float, remaining_amount: float, 
-                           due_date: str) -> Dict[str, Any]:
-        """تسجيل عملية بيع آجل / تقسيط جديدة في جدول الأقساط بالبنية الصحيحة تماماً."""
+                           installment_value: float, due_date: str) -> Dict[str, Any]:
+        """تسجيل عملية التقسيط مع حفظ اسم الصنف وقيمة القسط بانتظام في جدول الأقساط."""
         supabase = get_supabase_client()
         if not supabase: return {}
         
         status = "مدفوع" if remaining_amount <= 0 else "نشط"
         
-        # مطابقة الأعمدة تماماً مع بنية جدول SQL الفعلي لديك (بدون transaction_id لعدم وجوده بالجدول)
         payload = {
             "branch": branch,
             "customer_name": customer_name,
+            "item_name": item_name,
             "total_amount": total_amount,
             "down_payment": down_payment,
             "remaining_amount": remaining_amount,
+            "installment_value": installment_value,
             "due_date": due_date,
             "status": status
         }
