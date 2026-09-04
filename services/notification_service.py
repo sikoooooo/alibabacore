@@ -1,16 +1,28 @@
 import os
+try:
+    import streamlit as st
+except ImportError:
+    st = None
+
 from typing import Dict, Any, List, Optional
 from supabase import create_client, Client
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
-
 def get_supabase_client() -> Optional[Client]:
-    """إرجاع كائن الاتصال بقاعدة البيانات بشكل آمن."""
-    if not SUPABASE_URL or not SUPABASE_KEY:
+    """إرجاع كائن الاتصال بقاعدة البيانات بشكل آمن لدعم Streamlit Cloud والمحلي."""
+    try:
+        from core.database import supabase
+        if supabase:
+            return supabase
+    except Exception:
+        pass
+        
+    url = getattr(st, "secrets", {}).get("SUPABASE_URL") or getattr(st, "secrets", {}).get("supabase_url") or os.getenv("SUPABASE_URL", "")
+    key = getattr(st, "secrets", {}).get("SUPABASE_KEY") or getattr(st, "secrets", {}).get("supabase_key") or os.getenv("SUPABASE_KEY", "")
+    
+    if not url or not key:
         return None
     try:
-        return create_client(SUPABASE_URL, SUPABASE_KEY)
+        return create_client(url, key)
     except Exception as e:
         print(f"Error initializing Supabase client: {e}")
         return None
@@ -157,7 +169,7 @@ class NotificationService:
 
     @classmethod
     def mark_as_read(cls, notification_id: str) -> bool:
-        """|تحديث حالة الإشعار إلى مقروء."""
+        """تحديث حالة الإشعار إلى مقروء."""
         client = get_supabase_client()
         if not client:
             return False
