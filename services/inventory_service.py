@@ -14,13 +14,27 @@ class InventoryService:
             # الكمية الفعالة بالوحدة الصغرى أو الأساسية
             effective_qty = quantity * conv
             recorded_unit = minor_unit if minor_unit and minor_unit != "غير محدد" else actual_unit
+            unit_price_calculated = price / conv if conv > 1 else price
+
+            # تنبيه ذكي للمورد الأرخص في حالات الشراء (PURCHASE)
+            price_alert_msg = ""
+            if transaction_type == "PURCHASE":
+                try:
+                    # البحث عن آخر معاملات شراء لنفس الصنف لمعرفة الأسعار السابقة أو مقارنة الموردين
+                    past_txs = supabase.table("transactions").select("supplier, unit_price").eq("branch", branch).ilike("item_name", f"%{item_name}%").eq("type", "PURCHASE").order("created_at", desc=True).limit(5).execute()
+                    if past_txs.data:
+                        min_past_price = min([float(t.get("unit_price", 0)) for t in past_txs.data if t.get("unit_price")])
+                        if min_past_price > 0 and unit_price_calculated > min_past_price:
+                            price_alert_msg = f"\n⚠️ تنبيه توفير: صنف '{item_name}' تم شراؤه سابقاً بسعر أقل ({min_past_price} جنيه) مقارنة بالسعر الحالي ({unit_price_calculated} جنيه)."
+                except Exception as alert_err:
+                    print(f"Price alert check error: {alert_err}")
 
             # 1. تسجيل الحركة في جدول transactions
             tx_data = {
                 "branch": branch,
                 "item_name": item_name,
                 "quantity": quantity,
-                "unit_price": price / conv if conv > 1 else price,
+                "unit_price": unit_price_calculated,
                 "supplier": supplier,
                 "type": transaction_type,
                 "unit": recorded_unit
@@ -41,7 +55,7 @@ class InventoryService:
             except Exception as je:
                 print(f"Journal entry log error: {je}")
 
-            # 3. تحديث أو إدراج المخزن
+            # 3. تحديث أو إدراج المخزن مع حساب متوسط التكلفة المرجح (Weighted Average Cost)
             multiplier = 1 if transaction_type == "PURCHASE" else -1
             net_change = effective_qty * multiplier
 
@@ -50,10 +64,23 @@ class InventoryService:
             if existing.data:
                 row = existing.data[0]
                 current_qty = float(row.get("total_base_quantity", 0) or 0)
+                current_avg_cost = float(row.get("avg_cost_per_base", 0) or 0)
+                
                 new_qty = current_qty + net_change
                 
+                # حساب المتوسط السعري الجديد بدقة في حال عمليات الشراء
+                new_avg_cost = current_avg_cost
+                if transaction_type == "PURCHASE" and new_qty > 0:
+                    if current_qty > 0:
+                        total_old_cost_value = current_qty * current_avg_cost
+                        total_new_purchase_value = effective_qty * unit_price_calculated
+                        new_avg_cost = (total_old_cost_value + total_new_purchase_value) / new_qty
+                    else:
+                        new_avg_cost = unit_price_calculated
+
                 supabase.table("inventory").update({
                     "total_base_quantity": new_qty,
+                    "avg_cost_per_base": new_avg_cost,
                     "major_unit": recorded_unit
                 }).eq("id", row["id"]).execute()
             else:
@@ -62,22 +89,24 @@ class InventoryService:
                     "item_name": item_name,
                     "total_base_quantity": net_change,
                     "major_unit": recorded_unit,
-                    "avg_cost_per_base": price / conv if conv > 0 else price
+                    "avg_cost_per_base": unit_price_calculated
                 }
                 supabase.table("inventory").insert(new_row).execute()
 
-            return {"status": "SUCCESS"}
+            result_response = {"status": "SUCCESS"}
+            if price_alert_msg:
+                result_response["message"] = price_alert_msg
+            return result_response
+
         except Exception as e:
             return {"status": "ERROR", "message": str(e)}
 
     @classmethod
     def update_inventory_field(cls, branch: str, item_name: str, field_name: str, new_value: Any) -> Dict[str, Any]:
-        """دالة شاملة لتحديث أي خانة ناقصة أو تعديلها (المورد، البراند، إلخ) لصنف معين في جدول المخزن والحركات."""
         supabase = get_supabase_client()
         if not supabase:
             return {"status": "ERROR", "message": "قاعدة البيانات غير متوفرة."}
         
-        # خريطة أسماء الحقول المسموح بتعديلها لضمان الأمان المحاسبي
         allowed_fields = {
             "supplier": "المورد",
             "brand": "البراند/الماركة",
@@ -90,19 +119,16 @@ class InventoryService:
             return {"status": "ERROR", "message": f"⚠️ الحقل '{field_name}' غير مسموح بتعديله مباشره."}
         
         try:
-            # البحث عن الصنف في جدول المخزن للفرع المذكور
             res = supabase.table("inventory").select("id, item_name").eq("branch", branch).ilike("item_name", f"%{item_name}%").limit(1).execute()
             
             if not res.data:
-                return {"status": "NOT_FOUND", "message": f"⚠️ لم يتم العثور على الصنف '{item_name}' في المخزن لتحديث {allowed_fields[field_name]}."}
+                return {"status": "NOT_FOUND", "message": f"⚠️ لم يتم العثور على الصنف '{item_name}' في المخزن."}
                 
             record_id = res.data[0]["id"]
             actual_name = res.data[0]["item_name"]
             
-            # تنفيذ التحديث في جدول المخزن
             supabase.table("inventory").update({field_name: new_value}).eq("id", record_id).execute()
             
-            # تحديث جدول الحركات المرتبط أيضاً لتتطابق البيانات تماماً
             try:
                 supabase.table("transactions").update({field_name: new_value}).eq("branch", branch).ilike("item_name", f"%{item_name}%").execute()
             except Exception:
