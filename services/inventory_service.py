@@ -14,6 +14,7 @@ class InventoryService:
             effective_qty = quantity * conv
             recorded_unit = minor_unit if minor_unit and minor_unit != "غير محدد" else actual_unit
             unit_price_calculated = price / conv if conv > 1 else price
+            total_val = quantity * price
 
             price_alert_msg = ""
             if transaction_type == "PURCHASE":
@@ -38,10 +39,10 @@ class InventoryService:
             }
             supabase.table("transactions").insert(tx_data).execute()
 
+            # تحديد هل البند مصروف أو أصل ثابت
+            is_expense_or_asset = any(keyword in item_name.lower() for keyword in ["رواتب", "صيانة", "قرض", "أصل", "جهاز", "مرتبات"])
+
             # 2. إنشاء قيد يومي تلقائي دقيق في journal_entries
-            total_val = quantity * price
-            is_expense_or_asset = any(keyword in item_name.lower() for keyword in ["رواتب", "صيانة", "قرض", "أصل", "جهاز"])
-            
             if transaction_type == "PURCHASE" and is_expense_or_asset:
                 desc_text = f"مصروفات/أصول: {item_name} ({quantity} {actual_unit})"
                 debit_acc = item_name
@@ -66,6 +67,21 @@ class InventoryService:
                 supabase.table("journal_entries").insert(journal_data).execute()
             except Exception as je:
                 print(f"Journal entry log error: {je}")
+
+            # 2.5 تسجيل الحركة النقدية في treasury_ledger للخروج أو الدخول
+            if total_val > 0:
+                treasury_type = "OUTFLOW" if transaction_type == "PURCHASE" else "INFLOW"
+                treasury_desc = f"مصروف/أصل: {item_name}" if is_expense_or_asset else f"{transaction_type} - {item_name}"
+                treasury_data = {
+                    "branch": branch,
+                    "type": treasury_type,
+                    "amount": total_val,
+                    "description": treasury_desc
+                }
+                try:
+                    supabase.table("treasury_ledger").insert(treasury_data).execute()
+                except Exception as te:
+                    print(f"Treasury ledger log error: {te}")
 
             # 3. تحديث أو إدراج المخزن (فقط لو لم تكن مصروفات أو أصول أو قروض خدمية)
             if not is_expense_or_asset:
