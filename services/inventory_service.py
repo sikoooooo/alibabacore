@@ -68,20 +68,29 @@ class InventoryService:
             except Exception as je:
                 print(f"Journal entry log error: {je}")
 
-            # 2.5 تسجيل الحركة النقدية في treasury_ledger للخروج أو الدخول
-            if total_val > 0:
-                treasury_type = "OUTFLOW" if transaction_type == "PURCHASE" else "INFLOW"
-                treasury_desc = f"مصروف/أصل: {item_name}" if is_expense_or_asset else f"{transaction_type} - {item_name}"
-                treasury_data = {
-                    "branch": branch,
-                    "type": treasury_type,
-                    "amount": total_val,
-                    "description": treasury_desc
-                }
-                try:
-                    supabase.table("treasury_ledger").insert(treasury_data).execute()
-                except Exception as te:
-                    print(f"Treasury ledger log error: {te}")
+            # 2.5 تسجيل الحركة النقدية في treasury_ledger للخروج أو الدخول بدقة
+if total_val > 0:
+    treasury_type = "OUTFLOW" if transaction_type == "PURCHASE" else "INFLOW"
+    
+    # تحديد الوصف والتصنيف المالي الصحيح
+    if is_expense_or_asset:
+        if any(w in item_name.lower() for keyword in ["رواتب", "مرتبات", "صيانة", "إيجار", "كهرباء", "مياه"] for w in [keyword]):
+            treasury_desc = f"مصروفات تشغيلية: {item_name}"
+        else:
+            treasury_desc = f"شراء أصل ثابت: {item_name}"
+    else:
+        treasury_desc = f"{transaction_type} - {item_name}"
+
+    treasury_data = {
+        "branch": branch,
+        "type": treasury_type,
+        "amount": total_val,
+        "description": treasury_desc
+    }
+    try:
+        supabase.table("treasury_ledger").insert(treasury_data).execute()
+    except Exception as te:
+        print(f"Treasury ledger log error: {te}")
 
             # 3. تحديث أو إدراج المخزن (فقط لو لم تكن مصروفات أو أصول أو قروض خدمية)
             if not is_expense_or_asset:
