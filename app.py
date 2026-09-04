@@ -13,10 +13,63 @@ st.set_page_config(page_title="التنين - المساعد المحاسبي", 
 st.title("🐉 نظام التنين المحاسبي الصارم")
 st.write("النظام المحاسبي المباشر لإدارة المعاملات، المخزن، والموردين بسرعة فائقة.")
 
-# إعدادات النظام بالجانب
+# إعدادات النظام وتقارير الشريط الجانبي
 with st.sidebar:
     st.header("⚙️ إعدادات النظام")
     branch_name = st.text_input("اسم الفرع:", value="الفرع الرئيسي")
+    
+    st.divider()
+    st.subheader("📊 التقارير والملخصات السريعة")
+    
+    if st.button("💳 تقرير الأقساط والذمم العام"):
+        with st.spinner("جاري جلب تقرير الأقساط..."):
+            rep = QueryService.get_comprehensive_report(branch_name, "installments")
+            st.session_state.messages.append({"role": "assistant", "content": rep.get("message", "لا توجد بيانات.")})
+            st.rerun()
+
+    if st.button("📦 تقرير المخزن الصافي"):
+        with st.spinner("جاري جلب تقرير المخزن..."):
+            rep = QueryService.get_comprehensive_report(branch_name, "inventory")
+            st.session_state.messages.append({"role": "assistant", "content": rep.get("message", "لا توجد بيانات.")})
+            st.rerun()
+
+    if st.button("📈 إجمالي المبيعات والأرباح"):
+        with st.spinner("جاري جلب مبيعات الفرع..."):
+            rep = QueryService.get_comprehensive_report(branch_name, "sales_reps")
+            st.session_state.messages.append({"role": "assistant", "content": rep.get("message", "لا توجد بيانات.")})
+            st.rerun()
+
+    if st.button("🏭 مستحقات الموردين"):
+        with st.spinner("جاري جلب مستحقات الموردين..."):
+            rep = QueryService.get_comprehensive_report(branch_name, "suppliers")
+            st.session_state.messages.append({"role": "assistant", "content": rep.get("message", "لا توجد بيانات.")})
+            st.rerun()
+
+    if st.button("💰 حركة الخزينة وصافي الكاش"):
+        with st.spinner("جاري حساب رصيد الخزينة..."):
+            supabase = get_supabase_client()
+            if supabase:
+                res = supabase.table("treasury_ledger").select("type, amount").eq("branch", branch_name).execute()
+                records = res.data if res.data else []
+                total_in = sum(float(r.get("amount", 0)) for r in records if r.get("type") == "INFLOW")
+                total_out = sum(float(r.get("amount", 0)) for r in records if r.get("type") == "OUTFLOW")
+                net_cash = total_in - total_out
+                treasury_msg = (
+                    f"💰 **ملخص الخزينة والصافي للفرع ({branch_name}):**\n"
+                    f"- إجمالي الداخل (إيرادات ومقدمات): **{total_in:,.2f} ج.م**\n"
+                    f"- إجمالي الخارج (مصروفات ومدفوعات): **{total_out:,.2f} ج.م**\n"
+                    f"- **صافي رصيد الخزينة الحالي:** **{net_cash:,.2f} ج.م**"
+                )
+            else:
+                treasury_msg = "⚠️ تعذر الاتصال بقاعدة البيانات لجلب الخزينة."
+            st.session_state.messages.append({"role": "assistant", "content": treasury_msg})
+            st.rerun()
+
+    if st.button("🚨 نواقص المخزن والتنبيهات"):
+        with st.spinner("جاري فحص النواقص..."):
+            rep = NotificationService.get_smart_alerts(branch_name)
+            st.session_state.messages.append({"role": "assistant", "content": rep.get("message", "لا توجد تنبيهات.")})
+            st.rerun()
 
 # إعداد الجلسة للمحادثة
 if "messages" not in st.session_state:
