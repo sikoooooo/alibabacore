@@ -84,18 +84,28 @@ if user_input:
                         
                         supabase = get_supabase_client()
                         if supabase:
-                            # 1. التأكد من إنشاء العميل في جدول العملاء (customers) إذا لم يكن موجوداً
+                            # 1. التأكد من إنشاء العميل في جدول customers إذا لم يكن موجوداً
                             existing_cust = supabase.table("customers").select("id").eq("customer_name", party_name).execute()
                             if not existing_cust.data:
                                 supabase.table("customers").insert({"customer_name": party_name, "branch": branch_name}).execute()
+                            
+                            # 2. التأكد من تسجيل العميل في جدول customer_credit_limits (إذا كان جديداً، نضبط حده الائتماني بـ 10000 أو بقيمة المعاملة إذا تجاوزها)
+                            existing_limit = supabase.table("customer_credit_limits").select("id").eq("customer_name", party_name).execute()
+                            if not existing_limit.data:
+                                initial_limit = max(10000.0, total_amount)
+                                supabase.table("customer_credit_limits").insert({
+                                    "customer_name": party_name,
+                                    "credit_limit": initial_limit,
+                                    "branch": branch_name
+                                }).execute()
                         
-                        # 2. فحص الحد الائتماني للعميل مع المرونة (لا نمنع البيع، بل نحدث الحد تلقائياً وننبه التاجر)
+                        # 3. فحص الحد الائتماني للعميل مع المرونة (لا نمنع البيع، بل نحدث الحد تلقائياً وننبه التاجر)
                         credit_check = InstallmentService.check_customer_credit(party_name, remaining_amount)
                         if credit_check["is_exceeded"]:
                             action_results.append(f"⚠️ {credit_check['warning_message']}\n*جارٍ الاعتماد وتحديث الحد الائتماني تلقائياً لتسهيل البيع للتاجر...*")
                             InstallmentService.set_customer_credit_limit(party_name, credit_check["total_projected_debt"] + 5000, branch_name)
 
-                        # 3. خصم المخزون أولاً للصنف المباع مع فصله عن حقل الموردين تماماً
+                        # 4. خصم المخزون أولاً للصنف المباع مع فصله عن حقل الموردين تماماً
                         inv_res = InventoryService.process_transaction(
                             branch=branch_name,
                             item_name=item_name,
@@ -112,7 +122,7 @@ if user_input:
                             action_results.append(f"⚠️ تنبيه مخزني: {inv_res.get('message', 'خطأ في خصم المخزن')}")
                             continue
 
-                        # 4. إثبات الدفعة المقدمة وحدها في الخزينة (treasury_ledger)
+                        # 5. إثبات الدفعة المقدمة وحدها في الخزينة (treasury_ledger)
                         if supabase and down_payment > 0:
                             supabase.table("treasury_ledger").insert({
                                 "branch": branch_name,
@@ -121,7 +131,7 @@ if user_input:
                                 "description": f"مقدم تقسيط - {item_name} للعميل {party_name}"
                             }).execute()
 
-                        # 5. جدولة المبلغ المتبقي في جدول الأقساط برقم حركة فريد كلياً لمنع الأخطاء
+                        # 6. جدولة المبلغ المتبقي في جدول الأقساط برقم حركة فريد كلياً لمنع الأخطاء
                         tx_id = f"INST-{int(time.time() * 1000)}"
                         due_date = (date.today() + timedelta(days=30)).isoformat()
                         
