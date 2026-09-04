@@ -34,7 +34,7 @@ class InstallmentService:
             credit_limit = float(limit_res.data[0]["credit_limit"]) if limit_res.data else 10000.0
             
             # 2. حساب إجمالي الديون الحالية المتبقية على العميل
-            debt_res = supabase.table("installments").select("remaining_amount").eq("customer_name", customer_name).neq("status", "PAID").execute()
+            debt_res = supabase.table("installments").select("remaining_amount").eq("customer_name", customer_name).neq("status", "مدفوع").execute()
             current_debt = sum([float(item["remaining_amount"]) for item in debt_res.data]) if debt_res.data else 0.0
             
             total_projected_debt = current_debt + new_debt_amount
@@ -64,8 +64,7 @@ class InstallmentService:
             
             payload = {
                 "customer_name": customer_name,
-                "credit_limit": new_limit,
-                "branch": branch
+                "credit_limit": new_limit
             }
             
             if existing.data:
@@ -85,13 +84,14 @@ class InstallmentService:
     def record_installment(cls, transaction_id: str, branch: str, customer_name: str, 
                            total_amount: float, down_payment: float, remaining_amount: float, 
                            due_date: str) -> Dict[str, Any]:
-        """تسجيل عملية بيع آجل / تقسيط جديدة في جدول الأقساط."""
+        """تسجيل عملية بيع آجل / تقسيط جديدة في جدول الأقساط بالبنية الصحيحة تماماً."""
         supabase = get_supabase_client()
         if not supabase: return {}
         
-        status = "PAID" if remaining_amount <= 0 else "PENDING"
+        status = "مدفوع" if remaining_amount <= 0 else "نشط"
+        
+        # مطابقة الأعمدة تماماً مع بنية جدول SQL الفعلي لديك (بدون transaction_id لعدم وجوده بالجدول)
         payload = {
-            "transaction_id": transaction_id,
             "branch": branch,
             "customer_name": customer_name,
             "total_amount": total_amount,
@@ -114,7 +114,7 @@ class InstallmentService:
         if not supabase: return {"status": "ERROR", "message": "قاعدة البيانات غير متوفرة."}
         
         try:
-            pending_res = supabase.table("installments").select("*").eq("customer_name", customer_name).neq("status", "PAID").order("created_at", desc=False).execute()
+            pending_res = supabase.table("installments").select("*").eq("customer_name", customer_name).neq("status", "مدفوع").order("created_at", desc=False).execute()
                 
             if not pending_res.data:
                 return {"status": "NO_DEBT", "message": f"لا يوجد ديون معلقة على العميل {customer_name}."}
@@ -130,11 +130,11 @@ class InstallmentService:
                 if amount_to_apply >= rem:
                     amount_to_apply -= rem
                     new_rem = 0.0
-                    new_status = "PAID"
+                    new_status = "مدفوع"
                 else:
                     new_rem = rem - amount_to_apply
                     amount_to_apply = 0.0
-                    new_status = "PARTIAL"
+                    new_status = "جزئي"
                     
                 upd = supabase.table("installments").update({"remaining_amount": new_rem, "status": new_status}).eq("id", record["id"]).execute()
                 if upd.data:
@@ -156,7 +156,7 @@ class InstallmentService:
         supabase = get_supabase_client()
         if not supabase: return []
         try:
-            res = supabase.table("installments").select("*").eq("branch", branch).neq("status", "PAID").order("created_at", desc=True).execute()
+            res = supabase.table("installments").select("*").eq("branch", branch).neq("status", "مدفوع").order("created_at", desc=True).execute()
             return res.data or []
         except Exception as e:
             print(f"Get debts summary error: {e}")
@@ -164,11 +164,11 @@ class InstallmentService:
 
     @classmethod
     def get_monthly_installments_with_arrears(cls, branch: str, customer_name: Optional[str] = None) -> List[Dict[str, Any]]:
-        """جلب الأقساط المستحقة والمتراكمة (القديمة والجديدة مجمعة تحت اسم العميل مع ترحيل المتأخرات)."""
+        """جلب الأقساط المستحقة والمتراكمة للفرع والعميل."""
         supabase = get_supabase_client()
         if not supabase: return []
         try:
-            query = supabase.table("installments").select("*").eq("branch", branch).neq("status", "PAID")
+            query = supabase.table("installments").select("*").eq("branch", branch).neq("status", "مدفوع")
             if customer_name:
                 query = query.eq("customer_name", customer_name)
             
@@ -180,7 +180,7 @@ class InstallmentService:
 
     @classmethod
     def get_due_installments_for_alerts(cls, branch: str) -> List[Dict[str, Any]]:
-        """جلب الأقساط المستحقة والمتأخرة التي لم تُسدد بعد (من الأيام السابقة وحتى اليوم) لعرضها في الإشعارات."""
+        """جلب الأقساط المستحقة والمتأخرة لعرضها في الإشعارات."""
         supabase = get_supabase_client()
         if not supabase: return []
         try:
@@ -190,7 +190,7 @@ class InstallmentService:
             res = supabase.table("installments") \
                 .select("*") \
                 .eq("branch", branch) \
-                .neq("status", "PAID") \
+                .neq("status", "مدفوع") \
                 .lte("due_date", today_str) \
                 .order("due_date", desc=False) \
                 .execute()
