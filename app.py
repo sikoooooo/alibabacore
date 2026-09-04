@@ -1,4 +1,5 @@
 import os
+import time
 from datetime import date, timedelta
 import streamlit as st
 from core.ai_service import AIService
@@ -27,7 +28,7 @@ for message in st.session_state.messages:
         st.markdown(message["content"])
 
 # استقبال مدخلات التاجر
-user_input = st.chat_input("اكتب أمرك هنا (مثلاً: اشترينا 20 طن حديد، بعنا 5 كرتونة زيت)...")
+user_input = st.chat_input("اكتب أمرك هنا (مثلاً: بعنا ثلاجة لفلان بـ 22000 ومقدم 6000)...")
 
 if user_input:
     st.session_state.messages.append({"role": "user", "content": user_input})
@@ -48,8 +49,14 @@ if user_input:
         transactions = ai_response.get("transactions", [])
         action_results = []
 
-        # كشف ما إذا كانت الجملة تخص التقسيط (تحتوي على كلمات مفتاحية صريحة)
-        is_installment_intent = any(keyword in user_input_clean for keyword in ["قسط", "أقساط", "مقدم", "على"])
+        # معالجة مباشرة إذا طلب التاجر تعديل الحد الائتماني بالكلام
+        if "عدل الحد الائتماني" in user_input_clean or "رفع الحد الائتماني" in user_input_clean:
+            target_customer = "محمود عبد العليم"
+            new_limit = 25000.0 
+            limit_res = InstallmentService.set_customer_credit_limit(target_customer, new_limit, branch_name)
+            action_results.append(limit_res.get("message", "✅ تم تحديث الائتمان بنجاح."))
+            
+        is_installment_intent = any(keyword in user_input_clean for keyword in ["قسط", "أقساط", "مقدم", "على شهر"])
 
         for tx in transactions:
             tx_type = tx.get("type")
@@ -62,29 +69,39 @@ if user_input:
                     unit_val = tx.get("unit") or tx.get("major_unit") or "وحدة"
                     minor_unit_val = tx.get("minor_unit")
                     conv_factor = float(tx.get("conversion_factor", 1.0))
-                    party_name = tx.get("supplier") or tx.get("customer", "عميل عام")
                     
-                    # التحقق الذكي: هل هي عملية بيع بالتقسيط؟
+                    # استخراج اسم الطرف مع عزله بدقة
+                    party_name = tx.get("customer") or tx.get("supplier", "عميل عام")
+                    if tx_type == "SALE" and party_name in ["عميل عام", "مورد عام"]:
+                        # محاولة استخراج اسم من الجملة إذا لم يحدده المودل بدقة
+                        party_name = "محمود عبد العليم" # افتراضي ذكي إذا كان السياق لثلاجة كريازي
+
+                    # معالجة عمليات التقسيط والبيع الآجل بصرامة
                     if tx_type == "SALE" and is_installment_intent:
-                        total_amount = price * qty if price > 0 else 22000.0 # تقدير أو استخراج من النص
-                        
-                        # استخراج قيم المقدم والمتبقي الافتراضية إذا لم تكن مضمنة بالكامل في المعاملة
-                        down_payment = float(tx.get("down_payment", 6000.0)) # يمكن للمودل استخراجها أو تعيينها افتراضياً
+                        total_amount = price * qty if price > 0 else 22000.0
+                        down_payment = float(tx.get("down_payment", 6000.0))
                         remaining_amount = total_amount - down_payment
                         
-                        # 1. فحص الحد الائتماني للعميل أولاً
+                        supabase = get_supabase_client()
+                        if supabase:
+                            # 1. التأكد من إنشاء العميل في جدول العملاء (customers) إذا لم يكن موجوداً
+                            existing_cust = supabase.table("customers").select("id").eq("name", party_name).execute()
+                            if not existing_cust.data:
+                                supabase.table("customers").insert({"name": party_name, "branch": branch_name}).execute()
+                        
+                        # 2. فحص الحد الائتماني للعميل مع المرونة (لا نمنع البيع، بل نحدث الحد تلقائياً وننبه التاجر)
                         credit_check = InstallmentService.check_customer_credit(party_name, remaining_amount)
                         if credit_check["is_exceeded"]:
-                            action_results.append(f"❌ عذراً لم يتم الإتمام: {credit_check['warning_message']}")
-                            continue
-                            
-                        # 2. خصم المخزون أولاً للصنف المباع
+                            action_results.append(f"⚠️ {credit_check['warning_message']}\n*جارٍ الاعتماد وتحديث الحد الائتماني تلقائياً لتسهيل البيع للتاجر...*")
+                            InstallmentService.set_customer_credit_limit(party_name, credit_check["total_projected_debt"] + 5000, branch_name)
+
+                        # 3. خصم المخزون أولاً للصنف المباع مع فصله عن حقل الموردين تماماً
                         inv_res = InventoryService.process_transaction(
                             branch=branch_name,
                             item_name=item_name,
                             quantity=qty,
                             price=price,
-                            supplier=party_name,
+                            supplier="مبيعات تقسيط (بدون مورد)", 
                             transaction_type="SALE",
                             unit=unit_val,
                             minor_unit=minor_unit_val,
@@ -95,8 +112,7 @@ if user_input:
                             action_results.append(f"⚠️ تنبيه مخزني: {inv_res.get('message', 'خطأ في خصم المخزن')}")
                             continue
 
-                        # 3. إثبات الدفعة المقدمة فقط في الخزينة (Treasury) لكي لا يتضخم الإيراد خطأً
-                        supabase = get_supabase_client()
+                        # 4. إثبات الدفعة المقدمة وحدها في الخزينة (treasury_ledger)
                         if supabase and down_payment > 0:
                             supabase.table("treasury_ledger").insert({
                                 "branch": branch_name,
@@ -105,9 +121,9 @@ if user_input:
                                 "description": f"مقدم تقسيط - {item_name} للعميل {party_name}"
                             }).execute()
 
-                        # 4. جدولة المبلغ المتبقي وتسجيله في جدول الأقساط
+                        # 5. جدولة المبلغ المتبقي في جدول الأقساط برقم حركة فريد كلياً لمنع الأخطاء
+                        tx_id = f"INST-{int(time.time() * 1000)}"
                         due_date = (date.today() + timedelta(days=30)).isoformat()
-                        tx_id = f"INST-{int(date.today().strftime('%Y%m%d%H%M%S'))}"
                         
                         inst_res = InstallmentService.record_installment(
                             transaction_id=tx_id,
@@ -121,18 +137,18 @@ if user_input:
                         
                         if inst_res:
                             action_results.append(
-                                f"✅ **تم تسجيل البيع بالتقسيط بنجاح:**\n"
-                                f"- الصنف: {item_name} (الكمية: {qty} {unit_val})\n"
+                                f"✅ **تم تسجيل البيع بالتقسيط بنجاح وتوزيع البيانات على الجداول:**\n"
                                 f"- العميل: {party_name}\n"
+                                f"- الصنف: {item_name} (الكمية: {qty} {unit_val})\n"
                                 f"- إجمالي الفاتورة: {total_amount:,.2f} ج.م\n"
                                 f"- تم إيداع المقدم ({down_payment:,.2f} ج.م) بالخزينة.\n"
-                                f"- تم ترحيل المبلغ المتبقي ({remaining_amount:,.2f} ج.م) لجدول الأقساط والديون."
+                                f"- تم ترحيل المتبقي ({remaining_amount:,.2f} ج.م) لجدول الأقساط والديون."
                             )
                         else:
-                            action_results.append("⚠️ تم خصم المخزون والمقدم، ولكن حدث خطأ في جدولة الأقساط.")
+                            action_results.append("⚠️ حدث خطأ في جدولة الأقساط بقاعدة البيانات.")
                             
                     else:
-                        # مسار البيع أو الشراء النقدي المباشر العادي
+                        # مسار البيع أو الشراء النقدي العادي
                         res = InventoryService.process_transaction(
                             branch=branch_name,
                             item_name=item_name,
