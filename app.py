@@ -194,8 +194,11 @@ if user_input:
                 if "مخزن" in user_input_clean or "رصيد" in user_input_clean:
                     res = QueryService.get_comprehensive_report(branch_name, "inventory")
                     action_results.append(res.get('message', ''))
-                elif "أقساط" in user_input_clean or "ديون" in user_input_clean:
-                    res = QueryService.get_comprehensive_report(branch_name, "installments")
+                elif "أقساط" in user_input_clean or "ديون" in user_input_clean or "بيان" in user_input_clean:
+                    if "أم يوسف" in user_input_clean:
+                        res = QueryService.get_customer_installments(branch_name, "أم يوسف")
+                    else:
+                        res = QueryService.get_comprehensive_report(branch_name, "installments")
                     action_results.append(res.get('message', ''))
                 elif "مورد" in user_input_clean:
                     res = QueryService.get_comprehensive_report(branch_name, "suppliers")
