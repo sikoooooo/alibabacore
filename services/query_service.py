@@ -76,3 +76,40 @@ class QueryService:
         except Exception as e:
             print(f"Comprehensive query error: {e}")
             return {"status": "ERROR", "message": f"حدث خطأ أثناء جلب التقارير: {str(e)}"}
+
+    @classmethod
+    def get_customer_installments(cls, branch: str, customer_name: str) -> Dict[str, Any]:
+        """
+        استعلام مخصص لجلب جدول الأقساط والذمم الخاصة بعميل معين بالاسم من جدول installments بتركيز تجمعي.
+        """
+        supabase = get_supabase_client()
+        if not supabase:
+            return {"status": "ERROR", "message": "قاعدة البيانات غير متوفرة."}
+        try:
+            response = supabase.table("installments")\
+                .select("*")\
+                .eq("branch", branch)\
+                .ilike("customer_name", f"%{customer_name}%")\
+                .execute()
+                
+            records = response.data if response.data else []
+            if not records:
+                return {"status": "EMPTY", "message": f"لا توجد أقساط مسجلة حالياً للعميل: {customer_name}"}
+                
+            report_lines = [f"📊 **جدول أقساط العميل ({customer_name}) - فرع ({branch}):**\n"]
+            for r in records:
+                report_lines.append(
+                    f"- **الصنف:** {r.get('item_name')}\n"
+                    f"  * إجمالي الفاتورة: {float(r.get('total_amount', 0)):,.2f} ج.م | المقدم: {float(r.get('down_payment', 0)):,.2f} ج.م\n"
+                    f"  * المتبقي: **{float(r.get('remaining_amount', 0)):,.2f} ج.م** | قيمة القسط: {float(r.get('installment_value', 0)):,.2f} ج.م\n"
+                    f"  * تاريخ الاستحقاق: {r.get('due_date')} | الحالة: `{r.get('status')}`\n"
+                    f"-----------------------------------"
+                )
+            return {
+                "status": "SUCCESS", 
+                "type": "customer_installments", 
+                "data": records, 
+                "message": "\n".join(report_lines)
+            }
+        except Exception as e:
+            return {"status": "ERROR", "message": f"خطأ في جلب أقساط العميل: {str(e)}"}
