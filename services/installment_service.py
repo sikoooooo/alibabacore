@@ -1,8 +1,13 @@
 import os
+import logging
 import streamlit as st
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 from supabase import create_client, Client
+
+# إعداد نظام التسجيل (Logging) بدلاً من الطباعة العشوائية
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 def get_supabase_client() -> Optional[Client]:
     """إرجاع كائن الاتصال بقاعدة البيانات بأمان عالي لدعم Streamlit Cloud"""
@@ -49,7 +54,7 @@ class InstallmentService:
                 "warning_message": f"⚠️ تنبيه الائتمان: العميل {clean_cust_name} سيتجاوز الحد الائتماني ({credit_limit:,.2f} ج.م). إجمالي الديون الحالية: {current_debt:,.2f} ج.م" if is_exceeded else ""
             }
         except Exception as e:
-            print(f"Credit check error: {e}")
+            logger.error(f"Credit check error: {e}")
             return {"is_exceeded": False, "warning_message": ""}
 
     @classmethod
@@ -78,7 +83,7 @@ class InstallmentService:
                 "message": f"✅ تم تحديث الحد الائتماني للعميل '{clean_cust_name}' ليصبح {new_limit:,.2f} ج.م بنجاح."
             }
         except Exception as e:
-            print(f"Set credit limit error: {e}")
+            logger.error(f"Set credit limit error: {e}")
             return {"status": "ERROR", "message": f"حدث خطأ أثناء تحديث الحد الائتماني: {str(e)}"}
 
     @classmethod
@@ -108,12 +113,12 @@ class InstallmentService:
             res = supabase.table("installments").insert(payload).execute()
             return res.data[0] if res.data else {}
         except Exception as e:
-            print(f"Record installment error: {e}")
+            logger.error(f"Record installment error: {e}")
             raise Exception(f"خطأ Supabase الفعلي في الأقساط: {str(e)}")
 
     @classmethod
     def process_payment(cls, customer_name: str, payment_amount: float, branch: str) -> Dict[str, Any]:
-        """تحصيل مبلغ نقدي لسداد ديون سابقة مع إزالة المسافات الزائدة."""
+        """تحصيل مبلغ نقدي لسداد ديون سابقة مع حفظ التناسق الآمن (Simulation for Transaction Integrity)."""
         supabase = get_supabase_client()
         if not supabase: return {"status": "ERROR", "message": "قاعدة البيانات غير متوفرة."}
         
@@ -126,24 +131,35 @@ class InstallmentService:
                 
             amount_to_apply = payment_amount
             updated_records = []
+            backup_states = [] # الاحتفاظ بنسخة للرجوع إليها في حال حدوث خطأ طارئ
             
             for record in pending_res.data:
-                if amount_to_apply <= 0:
-                    break
-                    
-                rem = float(record["remaining_amount"])
-                if amount_to_apply >= rem:
-                    amount_to_apply -= rem
-                    new_rem = 0.0
-                    new_status = "مدفوع"
-                else:
-                    new_rem = rem - amount_to_apply
-                    amount_to_apply = 0.0
-                    new_status = "جزئي"
-                    
-                upd = supabase.table("installments").update({"remaining_amount": new_rem, "status": new_status}).eq("id", record["id"]).execute()
-                if upd.data:
-                    updated_records.append(upd.data[0])
+                backup_states.append({"id": record["id"], "remaining_amount": record["remaining_amount"], "status": record["status"]})
+                
+            try:
+                for record in pending_res.data:
+                    if amount_to_apply <= 0:
+                        break
+                        
+                    rem = float(record["remaining_amount"])
+                    if amount_to_apply >= rem:
+                        amount_to_apply -= rem
+                        new_rem = 0.0
+                        new_status = "مدفوع"
+                    else:
+                        new_rem = rem - amount_to_apply
+                        amount_to_apply = 0.0
+                        new_status = "جزئي"
+                        
+                    upd = supabase.table("installments").update({"remaining_amount": new_rem, "status": new_status}).eq("id", record["id"]).execute()
+                    if upd.data:
+                        updated_records.append(upd.data[0])
+            except Exception as inner_err:
+                # عملية الاسترجاع الاحترازي (Rollback Manual Simulation) في حال فشل التحديث وسط الحلقة
+                logger.error(f"Payment loop failed, rolling back states: {inner_err}")
+                for b in backup_states:
+                    supabase.table("installments").update({"remaining_amount": b["remaining_amount"], "status": b["status"]}).eq("id", b["id"]).execute()
+                raise inner_err
                     
             return {
                 "status": "SUCCESS",
@@ -152,8 +168,8 @@ class InstallmentService:
                 "updated_records": updated_records
             }
         except Exception as e:
-            print(f"Process payment error: {e}")
-            return {"status": "ERROR"}
+            logger.error(f"Process payment error: {e}")
+            return {"status": "ERROR", "message": f"فشل المعاملة المالية: {str(e)}"}
 
     @classmethod
     def get_branch_debts_summary(cls, branch: str) -> List[Dict[str, Any]]:
@@ -164,12 +180,12 @@ class InstallmentService:
             res = supabase.table("installments").select("*").eq("branch", branch.strip()).neq("status", "مدفوع").order("created_at", desc=True).execute()
             return res.data or []
         except Exception as e:
-            print(f"Get debts summary error: {e}")
+            logger.error(f"Get debts summary error: {e}")
             return []
 
     @classmethod
     def get_installments_by_month_or_customer(cls, branch: str, target_month: Optional[int] = None, customer_name: Optional[str] = None) -> List[Dict[str, Any]]:
-        """فلترة وجلب الأقساط بدقة بناءً على الشهر أو العميل مع معالجة المسافات وتنسيقات التواريخ."""
+        """فلترة وجلب الأقساط بدقة عالية وسريعة مع معالجة المسافات."""
         supabase = get_supabase_client()
         if not supabase: return []
         
@@ -203,7 +219,7 @@ class InstallmentService:
             return filtered
             
         except Exception as e:
-            print(f"Error filtering installments: {e}")
+            logger.error(f"Error filtering installments: {e}")
             return []
 
     @classmethod
@@ -220,7 +236,7 @@ class InstallmentService:
             res = query.order("due_date", desc=False).execute()
             return res.data or []
         except Exception as e:
-            print(f"Error fetching installments with arrears: {e}")
+            logger.error(f"Error fetching installments with arrears: {e}")
             return []
 
     @classmethod
@@ -241,5 +257,5 @@ class InstallmentService:
                 
             return res.data or []
         except Exception as e:
-            print(f"Error fetching due installments for alerts: {e}")
+            logger.error(f"Error fetching due installments for alerts: {e}")
             return []
