@@ -2,7 +2,8 @@ import os
 import logging
 import streamlit as st
 from typing import Dict, Any, List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
+from dateutil.relativedelta import relativedelta
 from supabase import create_client, Client
 
 # إعداد نظام التسجيل (Logging) بدلاً من الطباعة العشوائية
@@ -89,29 +90,88 @@ class InstallmentService:
     @classmethod
     def record_installment(cls, branch: str, customer_name: str, item_name: str,
                            total_amount: float, down_payment: float, remaining_amount: float, 
-                           installment_value: float, due_date: str) -> Dict[str, Any]:
-        """تسجيل عملية التقسيط مع تنظيف المدخلات من المسافات الزائدة."""
+                           installment_value: float, due_date: str, installments_count: int = 1, 
+                           interval_days: int = 30, custom_schedules: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+        """
+        تسجيل عملية التقسيط بمرونة تامة:
+        - installments_count: عدد الأقساط المتكررة.
+        - interval_days: الفاصل الزمني بالأيام (7 للأسبوع، 10، 15، 30 للشهر، إلخ).
+        - custom_schedules: قائمة مخصصة للدفعات المؤجلة المختلفة (مثل دفع 200 ألف بعد 3 أشهر و200 ألف بعد 6 أشهر).
+        """
         supabase = get_supabase_client()
         if not supabase: return {}
         
         clean_cust = customer_name.strip()
         clean_item = item_name.strip()
-        status = "مدفوع" if remaining_amount <= 0 else "نشط"
         
-        payload = {
-            "branch": branch.strip(),
-            "customer_name": clean_cust,
-            "item_name": clean_item,
-            "total_amount": total_amount,
-            "down_payment": down_payment,
-            "remaining_amount": remaining_amount,
-            "installment_value": installment_value,
-            "due_date": due_date.strip(),
-            "status": status
-        }
         try:
-            res = supabase.table("installments").insert(payload).execute()
-            return res.data[0] if res.data else {}
+            base_date = datetime.strptime(due_date.strip().split("T")[0], "%Y-%m-%d")
+            inserted_records = []
+            
+            # 1. إذا وُجد جدول زمني مخصص (دفعات مؤجلة متباينة مثل 3 شهور و6 شهور)
+            if custom_schedules and isinstance(custom_schedules, list):
+                for sch in custom_schedules:
+                    sch_date = base_date + relativedelta(months=int(sch.get("months_offset", 0)))
+                    sch_amount = float(sch.get("amount", 0.0))
+                    
+                    if sch_amount <= 0:
+                        continue
+                        
+                    payload = {
+                        "branch": branch.strip(),
+                        "customer_name": clean_cust,
+                        "item_name": clean_item,
+                        "total_amount": total_amount,
+                        "down_payment": down_payment,
+                        "remaining_amount": round(sch_amount, 2),
+                        "installment_value": round(sch_amount, 2),
+                        "due_date": sch_date.strftime("%Y-%m-%d"),
+                        "status": "نشط"
+                    }
+                    res = supabase.table("installments").insert(payload).execute()
+                    if res.data:
+                        inserted_records.append(res.data[0])
+            
+            # 2. الأقساط الدورية المنتظمة (سواء باليوم أو الشهر)
+            if installments_count > 0 and remaining_amount > 0:
+                for i in range(max(1, installments_count)):
+                    if interval_days >= 30:
+                        # الاعتماد على الشهر بدقة إذا كان الفاصل شهرياً أو أكثر
+                        months_to_add = i * (interval_days // 30)
+                        current_due_date = base_date + relativedelta(months=months_to_add)
+                    else:
+                        # الاعتماد على الأيام (أسبوع، 10 أيام، 15 يوم)
+                        current_due_date = base_date + timedelta(days=i * interval_days)
+                    
+                    current_rem = installment_value if i < installments_count - 1 else (remaining_amount - (installment_value * (installments_count - 1)))
+                    current_rem = max(0.0, current_rem)
+                    
+                    if current_rem <= 0:
+                        continue
+                        
+                    status = "نشط"
+                    
+                    payload = {
+                        "branch": branch.strip(),
+                        "customer_name": clean_cust,
+                        "item_name": clean_item,
+                        "total_amount": total_amount,
+                        "down_payment": down_payment,
+                        "remaining_amount": round(current_rem, 2),
+                        "installment_value": round(installment_value, 2),
+                        "due_date": current_due_date.strftime("%Y-%m-%d"),
+                        "status": status
+                    }
+                    
+                    res = supabase.table("installments").insert(payload).execute()
+                    if res.data:
+                        inserted_records.append(res.data[0])
+                    
+            return {
+                "status": "SUCCESS",
+                "records_count": len(inserted_records),
+                "records": inserted_records
+            }
         except Exception as e:
             logger.error(f"Record installment error: {e}")
             raise Exception(f"خطأ Supabase الفعلي في الأقساط: {str(e)}")
@@ -124,14 +184,14 @@ class InstallmentService:
         
         try:
             clean_cust = customer_name.strip()
-            pending_res = supabase.table("installments").select("*").eq("customer_name", clean_cust).neq("status", "مدفوع").order("created_at", desc=False).execute()
+            pending_res = supabase.table("installments").select("*").eq("customer_name", clean_cust).neq("status", "مدفوع").order("due_date", desc=False).execute()
                 
             if not pending_res.data:
                 return {"status": "NO_DEBT", "message": f"لا يوجد ديون معلقة على العميل {clean_cust}."}
                 
             amount_to_apply = payment_amount
             updated_records = []
-            backup_states = [] # الاحتفاظ بنسخة للرجوع إليها في حال حدوث خطأ طارئ
+            backup_states = [] 
             
             for record in pending_res.data:
                 backup_states.append({"id": record["id"], "remaining_amount": record["remaining_amount"], "status": record["status"]})
@@ -155,7 +215,6 @@ class InstallmentService:
                     if upd.data:
                         updated_records.append(upd.data[0])
             except Exception as inner_err:
-                # عملية الاسترجاع الاحترازي (Rollback Manual Simulation) في حال فشل التحديث وسط الحلقة
                 logger.error(f"Payment loop failed, rolling back states: {inner_err}")
                 for b in backup_states:
                     supabase.table("installments").update({"remaining_amount": b["remaining_amount"], "status": b["status"]}).eq("id", b["id"]).execute()
