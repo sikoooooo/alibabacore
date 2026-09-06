@@ -178,7 +178,7 @@ class InstallmentService:
 
     @classmethod
     def process_payment(cls, customer_name: str, payment_amount: float, branch: str) -> Dict[str, Any]:
-        """تحصيل مبلغ نقدي لسداد ديون سابقة مع حفظ التناسق الآمن (Simulation for Transaction Integrity)."""
+        """تحصيل مبلغ نقدي وترحيل الأقساط المسددة بالكامل إلى جدول الأرشيف تلقائياً."""
         supabase = get_supabase_client()
         if not supabase: return {"status": "ERROR", "message": "قاعدة البيانات غير متوفرة."}
         
@@ -191,35 +191,34 @@ class InstallmentService:
                 
             amount_to_apply = payment_amount
             updated_records = []
-            backup_states = [] 
             
             for record in pending_res.data:
-                backup_states.append({"id": record["id"], "remaining_amount": record["remaining_amount"], "status": record["status"]})
+                if amount_to_apply <= 0:
+                    break
+                    
+                rem = float(record["remaining_amount"])
+                if amount_to_apply >= rem:
+                    amount_to_apply -= rem
+                    new_rem = 0.0
+                    new_status = "مدفوع"
+                else:
+                    new_rem = rem - amount_to_apply
+                    amount_to_apply = 0.0
+                    new_status = "جزئي"
                 
-            try:
-                for record in pending_res.data:
-                    if amount_to_apply <= 0:
-                        break
-                        
-                    rem = float(record["remaining_amount"])
-                    if amount_to_apply >= rem:
-                        amount_to_apply -= rem
-                        new_rem = 0.0
-                        new_status = "مدفوع"
-                    else:
-                        new_rem = rem - amount_to_apply
-                        amount_to_apply = 0.0
-                        new_status = "جزئي"
-                        
+                # إذا أصبح القسط مسدداً بالكامل، نقوم بنقله للأرشيف وحذفه من النشط
+                if new_status == "مدفوع":
+                    archive_payload = {**record, "remaining_amount": 0.0, "status": "مدفوع"}
+                    archive_payload.pop("id", None) # السماح بإنشاء معرف جديد أو الاحتفاظ بالقديم حسب رغبتك
+                    supabase.table("installments_archive").insert(archive_payload).execute()
+                    
+                    supabase.table("installments").delete().eq("id", record["id"]).execute()
+                    updated_records.append({**record, "status": "مدفوع (مؤرشف)"})
+                else:
                     upd = supabase.table("installments").update({"remaining_amount": new_rem, "status": new_status}).eq("id", record["id"]).execute()
                     if upd.data:
                         updated_records.append(upd.data[0])
-            except Exception as inner_err:
-                logger.error(f"Payment loop failed, rolling back states: {inner_err}")
-                for b in backup_states:
-                    supabase.table("installments").update({"remaining_amount": b["remaining_amount"], "status": b["status"]}).eq("id", b["id"]).execute()
-                raise inner_err
-                    
+                        
             return {
                 "status": "SUCCESS",
                 "applied_amount": payment_amount - amount_to_apply,
@@ -227,7 +226,7 @@ class InstallmentService:
                 "updated_records": updated_records
             }
         except Exception as e:
-            logger.error(f"Process payment error: {e}")
+            logger.error(f"Process payment & archive error: {e}")
             return {"status": "ERROR", "message": f"فشل المعاملة المالية: {str(e)}"}
 
     @classmethod
