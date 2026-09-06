@@ -1,6 +1,6 @@
 import os
 import time
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 import streamlit as st
 from core.ai_service import AIService
 from services.inventory_service import InventoryService
@@ -96,41 +96,84 @@ if user_input:
         import re
         action_results = []
         
-        # 1. فحص شامل لاستعلامات الأقساط الخاصة بالشهور (مثل: اقساط شهر 11، ديون شهر 11، إلخ)
+        # 1. معالجة ذكية لاستعلامات الأقساط (سواء بالشهور مثل "شهر 11" أو بالعملاء مثل "عم عبده")
         month_match = re.search(r'(?:شهر|ش)\s*(\d{1,2})', user_input_clean)
-        is_installment_query = any(k in user_input_clean for k in ["قسط", "أقساط", "ديون", "بيان", "مستحق"])
+        is_installment_query = any(k in user_input_clean for k in ["قسط", "أقساط", "ديون", "بيان", "مستحق", "هات"])
         
-        if is_installment_query and month_match:
-            target_month = month_match.group(1).zfill(2) # تحويل الرقم لشكل '11'
+        if is_installment_query:
             supabase = get_supabase_client()
             if supabase:
-                # جلب جدول الأقساط الخاص بالفرع
                 inst_query = supabase.table("installments").select("*").eq("branch", branch_name).execute()
                 rows = inst_query.data if inst_query.data else []
                 
                 filtered_rows = []
-                for r in rows:
-                    due_date_str = str(r.get("due_date", ""))
-                    # مطابقة الشهر في تاريخ الاستحقاق (سواء بالشكل YYYY-MM أو غيره)
-                    if f"-{target_month}-" in due_date_str or due_date_str.startswith(f"2026-{target_month}") or due_date_str.startswith(f"2025-{target_month}"):
-                        filtered_rows.append(r)
                 
-                if filtered_rows:
-                    msg = f"📋 **أقساط الاستحقاق لشهر ({target_month}) لفرع {branch_name}:**\n"
-                    total_month_amt = 0
-                    for row in filtered_rows:
-                        cust = row.get("customer_name", "غير معروف")
-                        item = row.get("item_name", "صنف")
-                        val = float(row.get("installment_value", row.get("remaining_amount", 0)))
-                        date_due = row.get("due_date", "")
-                        total_month_amt += val
-                        msg += f"- العميل: **{cust}** | الصنف: {item} | القسط: **{val:,.2f} ج.م** (تاريخ الاستحقاق: {date_due})\n"
-                    msg += f"\n💰 **إجمالي المستحق في شهر {target_month}:** **{total_month_amt:,.2f} ج.م**"
-                    action_results.append(msg)
-                else:
-                    action_results.append(f"ℹ️ لا توجد أقساط مسجلة تستحق في شهر {target_month} للفرع ({branch_name}).")
+                # أ. حالة البحث بالشهر (مثلاً: شهر 11)
+                if month_match:
+                    target_month = int(month_match.group(1))
+                    for r in rows:
+                        due_date_str = str(r.get("due_date", ""))
+                        try:
+                            if "-" in due_date_str:
+                                dt_obj = datetime.strptime(due_date_str.split("T")[0], "%Y-%m-%d")
+                                if dt_obj.month == target_month:
+                                    filtered_rows.append(r)
+                            elif f"-{str(target_month).zfill(2)}-" in due_date_str:
+                                filtered_rows.append(r)
+                        except Exception:
+                            if f"-{str(target_month).zfill(2)}-" in due_date_str:
+                                filtered_rows.append(r)
+                                
+                    if filtered_rows:
+                        msg = f"📋 **أقساط الاستحقاق لشهر ({target_month}) لفرع {branch_name}:**\n"
+                        total_month_amt = 0
+                        for row in filtered_rows:
+                            cust = row.get("customer_name", "غير معروف")
+                            item = row.get("item_name", "صنف")
+                            val = float(row.get("installment_value", row.get("remaining_amount", 0)))
+                            date_due = row.get("due_date", "")
+                            total_month_amt += val
+                            msg += f"- العميل: **{cust}** | الصنف: {item} | القسط: **{val:,.2f} ج.م** (تاريخ الاستحقاق: {date_due})\n"
+                        msg += f"\n💰 **إجمالي المستحق في الشهر:** **{total_month_amt:,.2f} ج.م**"
+                        action_results.append(msg)
+                    else:
+                        action_results.append(f"ℹ️ لا توجد أقساط مسجلة تستحق في شهر {target_month} للفرع ({branch_name}).")
+                
+                # ب. حالة البحث باسم عميل معين (مثل: عم عبده)
+                elif "عم" in user_input_clean or "العميل" in user_input_clean or any(c.get("customer_name", "").lower() in user_input_clean for c in rows):
+                    # استخراج اسم العميل من النص
+                    target_cust_name = ""
+                    for r in rows:
+                        c_name = str(r.get("customer_name", ""))
+                        if c_name and c_name.lower() in user_input_clean:
+                            target_cust_name = c_name
+                            break
+                    
+                    if not target_cust_name:
+                        # محاولة استخراج الاسم بعد كلمة مثل "عم" أو "لـ"
+                        cust_search_match = re.search(r'(?:عم|العميل|لـ|عن)\s*([أ-ي\w\s]+)', user_input)
+                        if cust_search_match:
+                            target_cust_name = cust_search_match.group(1).strip()
+                            
+                    if target_cust_name:
+                        cust_rows = [r for r in rows if target_cust_name.lower() in str(r.get("customer_name", "")).lower()]
+                        if cust_rows:
+                            msg = f"📋 **تفاصيل أقساط وذمم العميل ({target_cust_name}) لفرع {branch_name}:**\n"
+                            total_cust_rem = 0
+                            for row in cust_rows:
+                                item = row.get("item_name", "صنف")
+                                total_inv = float(row.get("total_amount", 0))
+                                rem = float(row.get("remaining_amount", 0))
+                                inst_val = float(row.get("installment_value", 0))
+                                date_due = row.get("due_date", "")
+                                total_cust_rem += rem
+                                msg += f"- الصنف: **{item}** | إجمالي: {total_inv:,.2f} | المتبقي: **{rem:,.2f} ج.م** | القسط الشهري: {inst_val:,.2f} (الاستحقاق: {date_due})\n"
+                            msg += f"\n💰 **إجمالي المتبقي على العميل:** **{total_cust_rem:,.2f} ج.م**"
+                            action_results.append(msg)
+                        else:
+                            action_results.append(f"ℹ️ لا توجد أقساط مسجلة باسم العميل ({target_cust_name}).")
 
-        # 2. إذا لم يكن استعلاماً عن شهر، نتابع المعالجة العادية عبر الـ AI وباقي الأوامر
+        # 2. المتابعة بالمعالجة العامة إن لم يكن استعلاماً مخصصاً للأقساط السابقة
         if not action_results:
             ai_response = AIService.smart_process_command(
                 user_text=user_input,
@@ -141,7 +184,6 @@ if user_input:
             
             transactions = ai_response.get("transactions", [])
 
-            # معالجة مباشرة إذا طلب التاجر تعديل الحد الائتماني بالكلام
             if "عدل الحد الائتماني" in user_input_clean or "رفع الحد الائتماني" in user_input_clean:
                 target_customer = "محمود عبد العليم"
                 new_limit = 25000.0 
