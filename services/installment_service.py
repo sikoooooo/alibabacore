@@ -1,6 +1,7 @@
 import os
 import streamlit as st
 from typing import Dict, Any, List, Optional
+from datetime import datetime
 from supabase import create_client, Client
 
 def get_supabase_client() -> Optional[Client]:
@@ -29,24 +30,23 @@ class InstallmentService:
             return {"is_exceeded": False, "warning_message": "⚠️ تعذر الاتصال بقاعدة البيانات للتحقق من الائتمان."}
         
         try:
-            # 1. جلب الحد الائتماني للعميل (الافتراضي 10,000 ج.م)
-            limit_res = supabase.table("customer_credit_limits").select("credit_limit").eq("customer_name", customer_name).execute()
+            clean_cust_name = customer_name.strip()
+            limit_res = supabase.table("customer_credit_limits").select("credit_limit").eq("customer_name", clean_cust_name).execute()
             credit_limit = float(limit_res.data[0]["credit_limit"]) if limit_res.data else 10000.0
             
-            # 2. حساب إجمالي الديون الحالية المتبقية على العميل
-            debt_res = supabase.table("installments").select("remaining_amount").eq("customer_name", customer_name).neq("status", "مدفوع").execute()
+            debt_res = supabase.table("installments").select("remaining_amount").eq("customer_name", clean_cust_name).neq("status", "مدفوع").execute()
             current_debt = sum([float(item["remaining_amount"]) for item in debt_res.data]) if debt_res.data else 0.0
             
             total_projected_debt = current_debt + new_debt_amount
             is_exceeded = total_projected_debt > credit_limit
             
             return {
-                "customer_name": customer_name,
+                "customer_name": clean_cust_name,
                 "current_debt": current_debt,
                 "credit_limit": credit_limit,
                 "total_projected_debt": total_projected_debt,
                 "is_exceeded": is_exceeded,
-                "warning_message": f"⚠️ تنبيه الائتمان: العميل {customer_name} سيتجاوز الحد الائتماني ({credit_limit:,.2f} ج.م). إجمالي الديون الحالية: {current_debt:,.2f} ج.م" if is_exceeded else ""
+                "warning_message": f"⚠️ تنبيه الائتمان: العميل {clean_cust_name} سيتجاوز الحد الائتماني ({credit_limit:,.2f} ج.م). إجمالي الديون الحالية: {current_debt:,.2f} ج.م" if is_exceeded else ""
             }
         except Exception as e:
             print(f"Credit check error: {e}")
@@ -54,27 +54,28 @@ class InstallmentService:
 
     @classmethod
     def set_customer_credit_limit(cls, customer_name: str, new_limit: float, branch: str) -> Dict[str, Any]:
-        """تحديث أو إدراج الحد الائتماني للعميل مباشرة من واجهة الشات دون الحاجة للوحة تحكم Supabase."""
+        """تحديث أو إدراج الحد الائتماني للعميل مباشرة من واجهة الشات."""
         supabase = get_supabase_client()
         if not supabase:
             return {"status": "ERROR", "message": "قاعدة البيانات غير متوفرة."}
         
         try:
-            existing = supabase.table("customer_credit_limits").select("id").eq("customer_name", customer_name).execute()
+            clean_cust_name = customer_name.strip()
+            existing = supabase.table("customer_credit_limits").select("id").eq("customer_name", clean_cust_name).execute()
             
             payload = {
-                "customer_name": customer_name,
+                "customer_name": clean_cust_name,
                 "credit_limit": new_limit
             }
             
             if existing.data:
-                supabase.table("customer_credit_limits").update({"credit_limit": new_limit}).eq("customer_name", customer_name).execute()
+                supabase.table("customer_credit_limits").update({"credit_limit": new_limit}).eq("customer_name", clean_cust_name).execute()
             else:
                 supabase.table("customer_credit_limits").insert(payload).execute()
                 
             return {
                 "status": "SUCCESS",
-                "message": f"✅ تم تحديث الحد الائتماني للعميل '{customer_name}' ليصبح {new_limit:,.2f} ج.م بنجاح."
+                "message": f"✅ تم تحديث الحد الائتماني للعميل '{clean_cust_name}' ليصبح {new_limit:,.2f} ج.م بنجاح."
             }
         except Exception as e:
             print(f"Set credit limit error: {e}")
@@ -84,21 +85,23 @@ class InstallmentService:
     def record_installment(cls, branch: str, customer_name: str, item_name: str,
                            total_amount: float, down_payment: float, remaining_amount: float, 
                            installment_value: float, due_date: str) -> Dict[str, Any]:
-        """تسجيل عملية التقسيط مع حفظ اسم الصنف وقيمة القسط بانتظام في جدول الأقساط."""
+        """تسجيل عملية التقسيط مع تنظيف المدخلات من المسافات الزائدة."""
         supabase = get_supabase_client()
         if not supabase: return {}
         
+        clean_cust = customer_name.strip()
+        clean_item = item_name.strip()
         status = "مدفوع" if remaining_amount <= 0 else "نشط"
         
         payload = {
-            "branch": branch,
-            "customer_name": customer_name,
-            "item_name": item_name,
+            "branch": branch.strip(),
+            "customer_name": clean_cust,
+            "item_name": clean_item,
             "total_amount": total_amount,
             "down_payment": down_payment,
             "remaining_amount": remaining_amount,
             "installment_value": installment_value,
-            "due_date": due_date,
+            "due_date": due_date.strip(),
             "status": status
         }
         try:
@@ -110,15 +113,16 @@ class InstallmentService:
 
     @classmethod
     def process_payment(cls, customer_name: str, payment_amount: float, branch: str) -> Dict[str, Any]:
-        """تحصيل مبلغ نقدي لسداد ديون سابقة لعميل (خصم من أقدم قسط)."""
+        """تحصيل مبلغ نقدي لسداد ديون سابقة مع إزالة المسافات الزائدة."""
         supabase = get_supabase_client()
         if not supabase: return {"status": "ERROR", "message": "قاعدة البيانات غير متوفرة."}
         
         try:
-            pending_res = supabase.table("installments").select("*").eq("customer_name", customer_name).neq("status", "مدفوع").order("created_at", desc=False).execute()
+            clean_cust = customer_name.strip()
+            pending_res = supabase.table("installments").select("*").eq("customer_name", clean_cust).neq("status", "مدفوع").order("created_at", desc=False).execute()
                 
             if not pending_res.data:
-                return {"status": "NO_DEBT", "message": f"لا يوجد ديون معلقة على العميل {customer_name}."}
+                return {"status": "NO_DEBT", "message": f"لا يوجد ديون معلقة على العميل {clean_cust}."}
                 
             amount_to_apply = payment_amount
             updated_records = []
@@ -157,10 +161,49 @@ class InstallmentService:
         supabase = get_supabase_client()
         if not supabase: return []
         try:
-            res = supabase.table("installments").select("*").eq("branch", branch).neq("status", "مدفوع").order("created_at", desc=True).execute()
+            res = supabase.table("installments").select("*").eq("branch", branch.strip()).neq("status", "مدفوع").order("created_at", desc=True).execute()
             return res.data or []
         except Exception as e:
             print(f"Get debts summary error: {e}")
+            return []
+
+    @classmethod
+    def get_installments_by_month_or_customer(cls, branch: str, target_month: Optional[int] = None, customer_name: Optional[str] = None) -> List[Dict[str, Any]]:
+        """فلترة وجلب الأقساط بدقة بناءً على الشهر أو العميل مع معالجة المسافات وتنسيقات التواريخ."""
+        supabase = get_supabase_client()
+        if not supabase: return []
+        
+        try:
+            clean_branch = branch.strip()
+            query = supabase.table("installments").select("*").eq("branch", clean_branch).neq("status", "مدفوع")
+            
+            if customer_name:
+                clean_cust = customer_name.strip()
+                query = query.ilike("customer_name", f"%{clean_cust}%")
+                
+            res = query.execute()
+            rows = res.data or []
+            
+            if not target_month:
+                return rows
+                
+            filtered = []
+            for r in rows:
+                due_date_str = str(r.get("due_date", "")).strip()
+                try:
+                    if "-" in due_date_str:
+                        dt_obj = datetime.strptime(due_date_str.split("T")[0], "%Y-%m-%d")
+                        if dt_obj.month == int(target_month):
+                            filtered.append(r)
+                    elif f"-{str(target_month).zfill(2)}-" in due_date_str or due_date_str.startswith(f"{target_month}-"):
+                        filtered.append(r)
+                except Exception:
+                    if f"-{target_month}-" in due_date_str or f"/{target_month}/" in due_date_str:
+                        filtered.append(r)
+            return filtered
+            
+        except Exception as e:
+            print(f"Error filtering installments: {e}")
             return []
 
     @classmethod
@@ -169,9 +212,10 @@ class InstallmentService:
         supabase = get_supabase_client()
         if not supabase: return []
         try:
-            query = supabase.table("installments").select("*").eq("branch", branch).neq("status", "مدفوع")
+            clean_branch = branch.strip()
+            query = supabase.table("installments").select("*").eq("branch", clean_branch).neq("status", "مدفوع")
             if customer_name:
-                query = query.eq("customer_name", customer_name)
+                query = query.eq("customer_name", customer_name.strip())
             
             res = query.order("due_date", desc=False).execute()
             return res.data or []
@@ -185,12 +229,11 @@ class InstallmentService:
         supabase = get_supabase_client()
         if not supabase: return []
         try:
-            from datetime import date
-            today_str = date.today().isoformat()
+            today_str = datetime.today().date().isoformat()
             
             res = supabase.table("installments") \
                 .select("*") \
-                .eq("branch", branch) \
+                .eq("branch", branch.strip()) \
                 .neq("status", "مدفوع") \
                 .lte("due_date", today_str) \
                 .order("due_date", desc=False) \
