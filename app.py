@@ -243,8 +243,9 @@ if user_input:
                             if remaining_amount == 0.0:
                                 remaining_amount = total_amount - down_payment
 
+                            # التعديل هنا لدعم: شهر، شهور، أشهر
                             months_count = 3
-                            months_match = re.search(r'(\d+)\s*شهر', user_input_clean)
+                            months_match = re.search(r'(\d+)\s*(?:شهر|شهور|أشهر)', user_input_clean)
                             if months_match:
                                 months_count = int(months_match.group(1))
                                 
@@ -303,6 +304,8 @@ if user_input:
                                 }).execute()
 
                             due_date = (date.today() + timedelta(days=30)).isoformat()
+                            
+                            # تمرير عدد الأقساط الحقيقي إلى دالة الخدمة
                             inst_res = InstallmentService.record_installment(
                                 branch=branch_name,
                                 customer_name=party_name,
@@ -311,7 +314,8 @@ if user_input:
                                 down_payment=down_payment,
                                 remaining_amount=remaining_amount,
                                 installment_value=installment_value,
-                                due_date=due_date
+                                due_date=due_date,
+                                installments_count=months_count
                             )
                             
                             if inst_res:
