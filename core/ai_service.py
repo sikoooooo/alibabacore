@@ -68,7 +68,17 @@ class AIService:
         3. دعم المعاملات المركبة واستعلامات الحد الائتماني:
            - إذا طلب التاجر تعيين أو تعديل حد ائتماني لعميل، اجعل نوع المعاملة "UPDATE_CREDIT_LIMIT".
 
-        4. تصنيف أنواع المعاملات (`type`):
+        4. حسابات التقسيط بدقة رياضية صارمة:
+           - إذا كانت المعاملة تقسيط، قم باستخراج أو حساب:
+             - `total_amount`: إجمالي قيمة الفاتورة أو البضاعة بدقة.
+             - `down_payment`: المبلغ المدفوع مقدماً (إن وُجد).
+             - `remaining_amount`: المبلغ المتبقي بدقة (يجب ألا يتجاوز إجمالي المبلغ أبداً).
+             - `installment_value`: قيمة القسط الواحد بدقة.
+             - `installments_count`: عدد الأقساط.
+             - `interval_days`: الفاصل الزمني للأقساط بالأيام (افتراضياً 30 للشهر).
+           - ممنوع نهائياً وضع قيم عشوائية أو وهمية (مثل 2 جنيه) ويجب أن تطابق الأرقام منطق كلام التاجر تماماً.
+
+        5. تصنيف أنواع المعاملات (`type`):
            - "PURCHASE": شراء أو توريد للمخزن أو مصروفات/أصول.
            - "SALE": بيع أو خروج من المخزن.
            - "RETURN": مرتجع مشتريات أو مبيعات.
@@ -81,7 +91,7 @@ class AIService:
         {{
             "confidence_score": 0.95,
             "persona_used": "{persona}",
-            "message_to_user": "الرد بأسلوب الشخصية المختارة يوضح ما تم بدقة مع ذكر تفاصيل الكمية والعبوة والتوجيه المحاسبي",
+            "message_to_user": "الرد بأسلوب الشخصية المختارة يوضح ما تم بدقة مع ذكر تفاصيل الكمية والعبوة والتقسيط والتوجيه المحاسبي",
             "transactions": [
                 {{
                     "type": "PURCHASE" | "SALE" | "RETURN" | "QUERY" | "UPDATE_PRICE" | "UPDATE_CREDIT_LIMIT" | "INCOMPLETE",
@@ -95,8 +105,12 @@ class AIService:
                     "conversion_factor": 1.0,
                     "unit_price": 0.0,
                     "is_installment": false,
+                    "total_amount": 0.0,
                     "down_payment": 0.0,
+                    "remaining_amount": 0.0,
                     "installment_value": 0.0,
+                    "installments_count": 1,
+                    "interval_days": 30,
                     "due_date": "غير محدد"
                 }}
             ]
@@ -154,8 +168,12 @@ class AIService:
                     "conversion_factor": 1.0,
                     "unit_price": 0.0,
                     "is_installment": False,
+                    "total_amount": 0.0,
                     "down_payment": 0.0,
+                    "remaining_amount": 0.0,
                     "installment_value": 0.0,
+                    "installments_count": 1,
+                    "interval_days": 30,
                     "due_date": "غير محدد"
                 }
             ]
