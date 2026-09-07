@@ -141,7 +141,6 @@ if user_input:
                 
                 # ب. حالة البحث باسم عميل معين (مثل: عم عبده)
                 elif "عم" in user_input_clean or "العميل" in user_input_clean or any(c.get("customer_name", "").lower() in user_input_clean for c in rows):
-                    # استخراج اسم العميل من النص
                     target_cust_name = ""
                     for r in rows:
                         c_name = str(r.get("customer_name", ""))
@@ -150,7 +149,6 @@ if user_input:
                             break
                     
                     if not target_cust_name:
-                        # محاولة استخراج الاسم بعد كلمة مثل "عم" أو "لـ"
                         cust_search_match = re.search(r'(?:عم|العميل|لـ|عن)\s*([أ-ي\w\s]+)', user_input)
                         if cust_search_match:
                             target_cust_name = cust_search_match.group(1).strip()
@@ -173,7 +171,7 @@ if user_input:
                         else:
                             action_results.append(f"ℹ️ لا توجد أقساط مسجلة باسم العميل ({target_cust_name}).")
 
-        # 2. المتابعة بالمعالجة العامة إن لم يكن استعلاماً مخصصاً للأقساط السابقة
+        # 2. المعالجة العامة للعمليات
         if not action_results:
             ai_response = AIService.smart_process_command(
                 user_text=user_input,
@@ -190,7 +188,7 @@ if user_input:
                 limit_res = InstallmentService.set_customer_credit_limit(target_customer, new_limit, branch_name)
                 action_results.append(limit_res.get("message", "✅ تم تحديث الائتمان بنجاح."))
                 
-            is_installment_intent = any(keyword in user_input_clean for keyword in ["قسط", "أقساط", "مقدم", "فاضل", "علي", "على"])
+            is_installment_intent = any(keyword in user_input_clean for keyword in ["قسط", "أقساط", "مقدم", "فاضل", "علي", "على", "باقي"])
 
             for tx in transactions:
                 tx_type = tx.get("type")
@@ -210,40 +208,55 @@ if user_input:
                             if cust_match:
                                 party_name = cust_match.group(1).strip()
                             else:
-                                party_name = "فريدة"
+                                party_name = "عميل"
 
                         if tx_type == "SALE" and is_installment_intent:
                             total_amount = price * qty if price > 0 else 0.0
                             down_payment = 0.0
                             remaining_amount = 0.0
                             
-                            price_match = re.search(r'بـ\s*(\d+)', user_input)
+                            price_match = re.search(r'بـ\s*([\d,]+)', user_input)
                             if price_match and total_amount == 0.0:
-                                total_amount = float(price_match.group(1))
+                                total_amount = float(price_match.group(1).replace(",", ""))
                                 
-                            dp_match = re.search(r'(?:دفعت|مقدم)\s*(\d+)', user_input_clean)
+                            dp_match = re.search(r'(?:دفعت|مقدم)\s*([\d,]+)', user_input_clean)
                             if dp_match:
-                                down_payment = float(dp_match.group(1))
+                                down_payment = float(dp_match.group(1).replace(",", ""))
                                 
-                            rem_match = re.search(r'(?:وفاضل|فاضل|باقي)\s*(\d+)', user_input_clean)
+                            rem_match = re.search(r'(?:وفاضل|فاضل|باقي)\s*([\d,]+)', user_input_clean)
                             if rem_match:
-                                remaining_amount = float(rem_match.group(1))
+                                remaining_amount = float(rem_match.group(1).replace(",", ""))
                             
-                            if total_amount == 0.0 and down_payment > 0 and remaining_amount > 0:
-                                total_amount = down_payment + remaining_amount
-                            elif total_amount > 0 and remaining_amount == 0.0 and down_payment > 0:
-                                remaining_amount = total_amount - down_payment
-                            elif total_amount > 0 and down_payment == 0.0 and remaining_amount > 0:
-                                down_payment = total_amount - remaining_amount
+                            # المنطق الذكي والآمن لمنع "الافتراضات الخاطئة":
+                            # لو توازن الأرقام غير صحيح أو ناقص، نتوقف ونطلب توضيحاً فورياً بدلاً من تأليف أرقام
+                            if total_amount == 0.0 or (down_payment == 0.0 and remaining_amount == 0.0):
+                                action_results.append(
+                                    "⚠️ **عذراً، البيانات المالية غير مكتملة أو غير واضحة.**\n"
+                                    "برجاء كتابة المعاملة بشكل دقيق يوضح: (إجمالي السعر، المقدم المدفوع، والمبلغ المتبقي للتقسيط)."
+                                )
+                                continue
 
-                            if total_amount == 0.0:
-                                total_amount = 400.0
-                            if down_payment == 0.0:
-                                down_payment = 100.0
-                            if remaining_amount == 0.0:
-                                remaining_amount = total_amount - down_payment
+                            # التحقق الصارم من صحة الأرقام الحسابية لمنع الهرتلة
+                            if remaining_amount > total_amount:
+                                action_results.append(
+                                    f"❌ **خطأ حسابي:** المبلغ المتبقي ({remaining_amount:,.2f}) أكبر من إجمالي الفاتورة ({total_amount:,.2f})! برجاء إعادة كتابة الأرقام بشكل صحيح."
+                                )
+                                continue
 
-                            # التعديل هنا لدعم: شهر، شهور، أشهر
+                            # حساب المقدم أو المتبقي الناقص بدقة لو تم توفير أحدهما مع الإجمالي
+                            if down_payment == 0.0 and remaining_amount > 0:
+                                down_payment = max(0.0, total_amount - remaining_amount)
+                            elif remaining_amount == 0.0 and down_payment > 0:
+                                remaining_amount = max(0.0, total_amount - down_payment)
+
+                            # التحقق من تطابق المعادلة الإجمالية
+                            if abs(total_amount - (down_payment + remaining_amount)) > 1.0:
+                                action_results.append(
+                                    f"❌ **تضارب في الأرقام:** إجمالي الفاتورة ({total_amount:,.2f}) لا يساوي مجموع المقدم ({down_payment:,.2f}) + المتبقي ({remaining_amount:,.2f})!\n"
+                                    "يرجى توضيح الأرقام الصحيحة لتسجيلها بدقة."
+                                )
+                                continue
+
                             months_count = 3
                             months_match = re.search(r'(\d+)\s*(?:شهر|شهور|أشهر)', user_input_clean)
                             if months_match:
@@ -276,7 +289,7 @@ if user_input:
                             
                             credit_check = InstallmentService.check_customer_credit(party_name, remaining_amount)
                             if credit_check["is_exceeded"]:
-                                action_results.append(f"⚠️ {credit_check['warning_message']}\n*جارٍ الاعتماد وتحديث الحد الائتماني تلقائياً لتسهيل البيع للتاجر...*")
+                                action_results.append(f"⚠️ {credit_check['warning_message']}\n*جارٍ الاعتماد وتحديث الحد الائتماني تلقائياً لتسهيل البيع...*")
                                 InstallmentService.set_customer_credit_limit(party_name, credit_check["total_projected_debt"] + 5000, branch_name)
 
                             inv_res = InventoryService.process_transaction(
@@ -304,8 +317,6 @@ if user_input:
                                 }).execute()
 
                             due_date = (date.today() + timedelta(days=30)).isoformat()
-                            
-                            # تمرير عدد الأقساط الحقيقي إلى دالة الخدمة
                             inst_res = InstallmentService.record_installment(
                                 branch=branch_name,
                                 customer_name=party_name,
