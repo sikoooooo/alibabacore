@@ -19,6 +19,15 @@ with st.sidebar:
     branch_name = st.text_input("اسم الفرع:", value="الفرع الرئيسي")
     
     st.divider()
+    st.subheader("💳 باقات الاشتراك الشهري")
+    st.info(
+        "**الباقة الأساسية (300 ج.م/شهرياً):**\n"
+        "- البيع النقدي وإدارة المخزن الأساسي.\n\n"
+        "**باقة السوبر App الشاملة (500 ج.م/شهرياً):**\n"
+        "- شاملة إدارة الأقساط، الذمم، ومؤشر الشراء الجمعي."
+    )
+    
+    st.divider()
     st.subheader("📊 التقارير والملخصات السريعة")
     
     if st.button("💳 تقرير الأقساط والذمم العام"):
@@ -189,12 +198,13 @@ if user_input:
                 action_results.append(limit_res.get("message", "✅ تم تحديث الائتمان بنجاح."))
                 
             is_installment_intent = any(keyword in user_input_clean for keyword in ["قسط", "أقساط", "مقدم", "فاضل", "علي", "على", "باقي"])
+            is_return_intent = "مرتجع" in user_input_clean
 
             for tx in transactions:
-                tx_type = tx.get("type")
+                tx_type = "RETURN" if is_return_intent else tx.get("type")
                 item_name = tx.get("item_name")
                 
-                if tx_type in ["PURCHASE", "SALE"] and item_name and item_name != "غير محدد":
+                if tx_type in ["PURCHASE", "SALE", "RETURN"] and item_name and item_name != "غير محدد":
                     try:
                         qty = float(tx.get("quantity", 1.0))
                         price = float(tx.get("unit_price", 0.0))
@@ -204,12 +214,48 @@ if user_input:
                         
                         party_name = tx.get("customer") or tx.get("supplier", "عميل عام")
                         if party_name in ["عميل عام", "مورد عام", "غير محدد"]:
-                            cust_match = re.search(r'(?:تبعت|تبع|لـ|لعميل)\s*([أ-ي\w\s]+?)(?:\s+دفعت|\s+وقسط|\s+وفاضل|\s+بـ|$)', user_input)
+                            cust_match = re.search(r'(?:تبعت|تبع|لـ|لعميل|من)\s*([أ-ي\w\s]+?)(?:\s+دفعت|\s+وقسط|\s+وفاضل|\s+بـ|$)', user_input)
                             if cust_match:
                                 party_name = cust_match.group(1).strip()
                             else:
                                 party_name = "عميل"
 
+                        # استخراج الخصم النقدي المباشر لو موجود في النص
+                        discount_match = re.search(r'خصم(?:\s+كاش)?\s*([\d,]+)', user_input_clean)
+                        discount_amount = float(discount_match.group(1).replace(",", "")) if discount_match else 0.0
+
+                        # أ. معالجة المرتجعات الذكية
+                        if tx_type == "RETURN":
+                            inv_res = InventoryService.process_transaction(
+                                branch=branch_name,
+                                item_name=item_name,
+                                quantity=qty,
+                                price=price,
+                                supplier="مرتجع", 
+                                transaction_type="PURCHASE", # إعادة إدخال الصنف للمخزن (زيادة)
+                                unit=unit_val,
+                                minor_unit=minor_unit_val,
+                                conversion_factor=conv_factor
+                            )
+                            if inv_res.get("status") == "SUCCESS":
+                                supabase = get_supabase_client()
+                                total_refund = (price * qty) if price > 0 else 0.0
+                                if discount_amount > 0:
+                                    total_refund = max(0.0, total_refund - discount_amount)
+                                    
+                                if supabase and total_refund > 0:
+                                    supabase.table("treasury_ledger").insert({
+                                        "branch": branch_name,
+                                        "type": "OUTFLOW",
+                                        "amount": total_refund,
+                                        "description": f"رد قيمة مرتجع - {item_name}"
+                                    }).execute()
+                                action_results.append(f"✅ تم إرجاع الصنف ({item_name}) للمخزن بنجاح وتم صرف مبلغ الرد من الخزينة.")
+                            else:
+                                action_results.append(f"⚠️ تنبيه مخزني للمرتجع: {inv_res.get('message', 'خطأ في معالجة المخزن')}")
+                            continue
+
+                        # ب. معالجة المبيعات بالتقسيط
                         if tx_type == "SALE" and is_installment_intent:
                             total_amount = price * qty if price > 0 else 0.0
                             down_payment = 0.0
@@ -227,8 +273,9 @@ if user_input:
                             if rem_match:
                                 remaining_amount = float(rem_match.group(1).replace(",", ""))
                             
-                            # المنطق الذكي والآمن لمنع "الافتراضات الخاطئة":
-                            # لو توازن الأرقام غير صحيح أو ناقص، نتوقف ونطلب توضيحاً فورياً بدلاً من تأليف أرقام
+                            if discount_amount > 0:
+                                total_amount = max(0.0, total_amount - discount_amount)
+
                             if total_amount == 0.0 or (down_payment == 0.0 and remaining_amount == 0.0):
                                 action_results.append(
                                     "⚠️ **عذراً، البيانات المالية غير مكتملة أو غير واضحة.**\n"
@@ -236,26 +283,16 @@ if user_input:
                                 )
                                 continue
 
-                            # التحقق الصارم من صحة الأرقام الحسابية لمنع الهرتلة
                             if remaining_amount > total_amount:
                                 action_results.append(
-                                    f"❌ **خطأ حسابي:** المبلغ المتبقي ({remaining_amount:,.2f}) أكبر من إجمالي الفاتورة ({total_amount:,.2f})! برجاء إعادة كتابة الأرقام بشكل صحيح."
+                                    f"❌ **خطأ حسابي:** المبلغ المتبقي ({remaining_amount:,.2f}) أكبر من إجمالي الفاتورة ({total_amount:,.2f})!"
                                 )
                                 continue
 
-                            # حساب المقدم أو المتبقي الناقص بدقة لو تم توفير أحدهما مع الإجمالي
                             if down_payment == 0.0 and remaining_amount > 0:
                                 down_payment = max(0.0, total_amount - remaining_amount)
                             elif remaining_amount == 0.0 and down_payment > 0:
                                 remaining_amount = max(0.0, total_amount - down_payment)
-
-                            # التحقق من تطابق المعادلة الإجمالية
-                            if abs(total_amount - (down_payment + remaining_amount)) > 1.0:
-                                action_results.append(
-                                    f"❌ **تضارب في الأرقام:** إجمالي الفاتورة ({total_amount:,.2f}) لا يساوي مجموع المقدم ({down_payment:,.2f}) + المتبقي ({remaining_amount:,.2f})!\n"
-                                    "يرجى توضيح الأرقام الصحيحة لتسجيلها بدقة."
-                                )
-                                continue
 
                             months_count = 3
                             months_match = re.search(r'(\d+)\s*(?:شهر|شهور|أشهر)', user_input_clean)
@@ -263,7 +300,6 @@ if user_input:
                                 months_count = int(months_match.group(1))
                                 
                             installment_value = remaining_amount / months_count if months_count > 0 else remaining_amount
-
                             initial_limit = max(10000.0, total_amount)
                             
                             supabase = get_supabase_client()
@@ -282,22 +318,13 @@ if user_input:
                                         "credit_limit": initial_limit,
                                         "branch": branch_name
                                     }).execute()
-                                else:
-                                    supabase.table("customer_credit_limits").update({
-                                        "credit_limit": initial_limit
-                                    }).eq("customer_name", party_name).execute()
                             
-                            credit_check = InstallmentService.check_customer_credit(party_name, remaining_amount)
-                            if credit_check["is_exceeded"]:
-                                action_results.append(f"⚠️ {credit_check['warning_message']}\n*جارٍ الاعتماد وتحديث الحد الائتماني تلقائياً لتسهيل البيع...*")
-                                InstallmentService.set_customer_credit_limit(party_name, credit_check["total_projected_debt"] + 5000, branch_name)
-
                             inv_res = InventoryService.process_transaction(
                                 branch=branch_name,
                                 item_name=item_name,
                                 quantity=qty,
                                 price=total_amount / qty if qty > 0 else total_amount,
-                                supplier="مبيعات تقسيط (بدون مورد)", 
+                                supplier="مبيعات تقسيط", 
                                 transaction_type="SALE",
                                 unit=unit_val,
                                 minor_unit=minor_unit_val,
@@ -313,7 +340,7 @@ if user_input:
                                     "branch": branch_name,
                                     "type": "INFLOW",
                                     "amount": down_payment,
-                                    "description": f"مقدم تقسيط (كاش) - {item_name} للعميل {party_name}"
+                                    "description": f"مقدم تقسيط - {item_name} للعميل {party_name}"
                                 }).execute()
 
                             due_date = (date.today() + timedelta(days=30)).isoformat()
@@ -329,26 +356,32 @@ if user_input:
                                 installments_count=months_count
                             )
                             
+                            discount_msg = f"\n- تم تطبيق خصم: {discount_amount:,.2f} ج.م" if discount_amount > 0 else ""
                             if inst_res:
                                 action_results.append(
-                                    f"✅ **تم تسجيل البيع بالتقسيط بنجاح وتوزيع الحسابات:**\n"
-                                    f"- العميل: {party_name}\n"
-                                    f"- الصنف: {item_name} (الكمية: {qty} {unit_val})\n"
-                                    f"- إجمالي الفاتورة: {total_amount:,.2f} ج.م\n"
-                                    f"- المقدم المدفوع (كاش بالخزينة): **{down_payment:,.2f} ج.م**\n"
-                                    f"- المتبقي أقساط: {remaining_amount:,.2f} ج.م على {months_count} شهور (قسط شهري: {installment_value:,.2f} ج.م)\n"
-                                    f"- تم خصم المخزون، إيداع المقدم بالخزينة، وترحيل الأقساط بنجاح."
+                                    f"✅ **تم تسجيل البيع بالتقسيط بنجاح:**\n"
+                                    f"- العميل: {party_name} | الصنف: {item_name}\n"
+                                    f"- إجمالي الصافي: {total_amount:,.2f} ج.م{discount_msg}\n"
+                                    f"- المقدم المدفوع: **{down_payment:,.2f} ج.م** | المتبقي أقساط: {remaining_amount:,.2f} ج.م"
                                 )
                             else:
                                 action_results.append("⚠️ حدث خطأ في جدولة الأقساط بقاعدة البيانات.")
-                                
+
+                        # ج. معالجة المشتريات (كاش أو على الحساب) والمبيعات النقدية
                         else:
+                            is_credit_purchase = tx_type == "PURCHASE" and any(k in user_input_clean for k in ["على الحساب", "دين", "آجل", "بدون دفع"])
+                            supplier_name = party_name if party_name and party_name != "غير محدد" else "مورد عام"
+                            
+                            total_invoice_price = price * qty
+                            if discount_amount > 0:
+                                total_invoice_price = max(0.0, total_invoice_price - discount_amount)
+
                             res = InventoryService.process_transaction(
                                 branch=branch_name,
                                 item_name=item_name,
                                 quantity=qty,
-                                price=price,
-                                supplier=party_name,
+                                price=total_invoice_price / qty if qty > 0 else total_invoice_price,
+                                supplier=supplier_name,
                                 transaction_type=tx_type,
                                 unit=unit_val,
                                 minor_unit=minor_unit_val,
@@ -357,15 +390,33 @@ if user_input:
                             
                             if res.get("status") == "SUCCESS":
                                 supabase = get_supabase_client()
-                                if supabase and price > 0:
-                                    supabase.table("treasury_ledger").insert({
-                                        "branch": branch_name,
-                                        "type": "INFLOW" if tx_type == "SALE" else "OUTFLOW",
-                                        "amount": price * qty,
-                                        "description": f"{'مبيعات' if tx_type == 'SALE' else 'مشتريات'} - {item_name}"
-                                    }).execute()
+                                if supabase:
+                                    if tx_type == "SALE" and total_invoice_price > 0:
+                                        supabase.table("treasury_ledger").insert({
+                                            "branch": branch_name,
+                                            "type": "INFLOW",
+                                            "amount": total_invoice_price,
+                                            "description": f"مبيعات - {item_name}"
+                                        }).execute()
+                                    elif tx_type == "PURCHASE":
+                                        # التحقق من وجود المورد وإضافته لجدول الموردين
+                                        existing_sup = supabase.table("suppliers").select("id").eq("supplier_name", supplier_name).eq("branch", branch_name).execute()
+                                        if not existing_sup.data:
+                                            supabase.table("suppliers").insert({
+                                                "supplier_name": supplier_name,
+                                                "branch": branch_name
+                                            }).execute()
 
-                                action_results.append(f"✅ تم الحفظ - {('مبيعات' if tx_type == 'SALE' else 'مشتريات')}: {item_name} (الكمية: {qty} {unit_val})")
+                                        if not is_credit_purchase and total_invoice_price > 0:
+                                            supabase.table("treasury_ledger").insert({
+                                                "branch": branch_name,
+                                                "type": "OUTFLOW",
+                                                "amount": total_invoice_price,
+                                                "description": f"مشتريات كاش من {supplier_name} - {item_name}"
+                                            }).execute()
+
+                                credit_label = " (على الحساب / دين)" if is_credit_purchase else ""
+                                action_results.append(f"✅ تم الحفظ - {('مبيعات' if tx_type == 'SALE' else 'مشتريات')}{credit_label}: {item_name} (الكمية: {qty} {unit_val})")
                             else:
                                 action_results.append(f"⚠️ تنبيه: {res.get('message', 'خطأ بالحفظ')}")
                                 
@@ -380,12 +431,7 @@ if user_input:
                         res = QueryService.get_comprehensive_report(branch_name, "inventory")
                         action_results.append(res.get('message', ''))
                     elif "أقساط" in user_input_clean or "ديون" in user_input_clean or "بيان" in user_input_clean:
-                        if "أم يوسف" in user_input_clean:
-                            res = QueryService.get_customer_installments(branch_name, "أم يوسف")
-                        elif "فريدة" in user_input_clean:
-                            res = QueryService.get_customer_installments(branch_name, "فريدة")
-                        else:
-                            res = QueryService.get_comprehensive_report(branch_name, "installments")
+                        res = QueryService.get_comprehensive_report(branch_name, "installments")
                         action_results.append(res.get('message', ''))
                     elif "مورد" in user_input_clean:
                         res = QueryService.get_comprehensive_report(branch_name, "suppliers")
