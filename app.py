@@ -105,7 +105,7 @@ if user_input:
         import re
         action_results = []
         
-        # 1. معالجة ذكية لاستعلامات الأقساط (سواء بالشهور مثل "شهر 11" أو بالعملاء مثل "عم عبده")
+        # 1. معالجة ذكية لاستعلامات الأقساط
         month_match = re.search(r'(?:شهر|ش)\s*(\d{1,2})', user_input_clean)
         is_installment_query = any(k in user_input_clean for k in ["قسط", "أقساط", "ديون", "بيان", "مستحق", "هات"])
         
@@ -117,7 +117,6 @@ if user_input:
                 
                 filtered_rows = []
                 
-                # أ. حالة البحث بالشهر (مثلاً: شهر 11)
                 if month_match:
                     target_month = int(month_match.group(1))
                     for r in rows:
@@ -148,7 +147,6 @@ if user_input:
                     else:
                         action_results.append(f"ℹ️ لا توجد أقساط مسجلة تستحق في شهر {target_month} للفرع ({branch_name}).")
                 
-                # ب. حالة البحث باسم عميل معين (مثل: عم عبده)
                 elif "عم" in user_input_clean or "العميل" in user_input_clean or any(c.get("customer_name", "").lower() in user_input_clean for c in rows):
                     target_cust_name = ""
                     for r in rows:
@@ -220,7 +218,6 @@ if user_input:
                             else:
                                 party_name = "عميل"
 
-                        # استخراج الخصم النقدي المباشر لو موجود في النص
                         discount_match = re.search(r'خصم(?:\s+كاش)?\s*([\d,]+)', user_input_clean)
                         discount_amount = float(discount_match.group(1).replace(",", "")) if discount_match else 0.0
 
@@ -232,7 +229,7 @@ if user_input:
                                 quantity=qty,
                                 price=price,
                                 supplier="مرتجع", 
-                                transaction_type="PURCHASE", # إعادة إدخال الصنف للمخزن (زيادة)
+                                transaction_type="PURCHASE", 
                                 unit=unit_val,
                                 minor_unit=minor_unit_val,
                                 conversion_factor=conv_factor
@@ -367,7 +364,7 @@ if user_input:
                             else:
                                 action_results.append("⚠️ حدث خطأ في جدولة الأقساط بقاعدة البيانات.")
 
-                        # ج. معالجة المشتريات (كاش أو على الحساب) والمبيعات النقدية
+                        # ج. معالجة المشتريات والمبيعات النقدية
                         else:
                             is_credit_purchase = tx_type == "PURCHASE" and any(k in user_input_clean for k in ["على الحساب", "دين", "آجل", "بدون دفع"])
                             supplier_name = party_name if party_name and party_name != "غير محدد" else "مورد عام"
@@ -399,7 +396,6 @@ if user_input:
                                             "description": f"مبيعات - {item_name}"
                                         }).execute()
                                     elif tx_type == "PURCHASE":
-                                     elif tx_type == "PURCHASE":
                                         # التحقق من وجود المورد وإضافته لجدول الموردين بالطريقة السليمة
                                         existing_sup = supabase.table("suppliers").select("id").eq("supplier_name", supplier_name).eq("branch_id", branch_name).execute()
                                         if not existing_sup.data:
