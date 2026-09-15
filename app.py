@@ -20,7 +20,7 @@ def get_branch_id_safely(branch_str):
     except Exception:
         pass
     return branch_str # كاحتياطي لو الجدول مش مفعل فيه الـ UUID
-    
+
 st.set_page_config(page_title="التنين - المساعد المحاسبي", page_icon="🐉", layout="centered")
 
 st.title("🐉 نظام التنين المحاسبي الصارم")
@@ -410,12 +410,13 @@ if user_input:
                                             "description": f"مبيعات - {item_name}"
                                         }).execute()
                                     elif tx_type == "PURCHASE":
-                                        # التحقق من وجود المورد وإضافته لجدول الموردين مرتبطاً بالفرع بدقة
-                                        existing_sup = supabase.table("suppliers").select("id").eq("supplier_name", supplier_name).eq("branch_id", branch_name).execute()
+                                        # التحقق الآمن من المورد وإضافته مع جلب المعرف المناسب للفرع بدقة
+                                        safe_branch_id = get_branch_id_safely(branch_name)
+                                        existing_sup = supabase.table("suppliers").select("id").eq("supplier_name", supplier_name).eq("branch_id", safe_branch_id).execute()
                                         if not existing_sup.data:
                                             supabase.table("suppliers").insert({
                                                 "supplier_name": supplier_name,
-                                                "branch_id": branch_name
+                                                "branch_id": safe_branch_id
                                             }).execute()
 
                                         if not is_credit_purchase and total_invoice_price > 0:
