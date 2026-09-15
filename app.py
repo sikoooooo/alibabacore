@@ -8,6 +8,19 @@ from services.installment_service import InstallmentService, get_supabase_client
 from services.notification_service import NotificationService
 from services.query_service import QueryService
 
+def get_branch_id_safely(branch_str):
+    """دالة آمنة لجلب معرف الفرع من قاعدة البيانات لتفادي أخطاء الـ UUID"""
+    supabase = get_supabase_client()
+    if not supabase:
+        return branch_str
+    try:
+        res = supabase.table("branches").select("id").eq("branch_name", branch_str).execute()
+        if res.data and len(res.data) > 0:
+            return res.data[0]["id"]
+    except Exception:
+        pass
+    return branch_str # كاحتياطي لو الجدول مش مفعل فيه الـ UUID
+    
 st.set_page_config(page_title="التنين - المساعد المحاسبي", page_icon="🐉", layout="centered")
 
 st.title("🐉 نظام التنين المحاسبي الصارم")
