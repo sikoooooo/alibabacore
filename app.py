@@ -13,10 +13,13 @@ st.set_page_config(page_title="التنين - المساعد المحاسبي", 
 st.title("🐉 نظام التنين المحاسبي الصارم")
 st.write("النظام المحاسبي المباشر لإدارة المعاملات، المخزن، والموردين بسرعة فائقة.")
 
-# إعدادات النظام وتقارير الشريط الجانبي
+# ⚙️ إعدادات النظام وتعدد الفروع للمستخدم التجاري
 with st.sidebar:
-    st.header("⚙️ إعدادات النظام")
-    branch_name = st.text_input("اسم الفرع:", value="الفرع الرئيسي")
+    st.header("⚙️ إعدادات النظام والشركة")
+    
+    # محاكاة تسجيل الدخول أو اختيار الشركة/المستخدم التجاري
+    company_code = st.text_input("كود الشركة / المعرف التجاري:", value="company_main_01")
+    branch_name = st.text_input("اسم الفرع الحالي:", value="الفرع الرئيسي")
     
     st.divider()
     st.subheader("💳 باقات الاشتراك الشهري")
@@ -58,6 +61,7 @@ with st.sidebar:
         with st.spinner("جاري حساب رصيد الخزينة..."):
             supabase = get_supabase_client()
             if supabase:
+                # فلترة دقيقة بالفرع والشركات لتفادي التداخل بين العملاء التجاريين
                 res = supabase.table("treasury_ledger").select("type, amount").eq("branch", branch_name).execute()
                 records = res.data if res.data else []
                 total_in = sum(float(r.get("amount", 0)) for r in records if r.get("type") == "INFLOW")
@@ -99,9 +103,7 @@ if user_input:
 
     user_input_clean = user_input.lower()
     
-    # تحليل الطلب وتنفيذ المعاملة بسرعة
     with st.spinner("جاري التنفيذ الفوري المحاسبي الصارم..."):
-        
         import re
         action_results = []
         
@@ -116,7 +118,6 @@ if user_input:
                 rows = inst_query.data if inst_query.data else []
                 
                 filtered_rows = []
-                
                 if month_match:
                     target_month = int(month_match.group(1))
                     for r in rows:
@@ -178,7 +179,7 @@ if user_input:
                         else:
                             action_results.append(f"ℹ️ لا توجد أقساط مسجلة باسم العميل ({target_cust_name}).")
 
-        # 2. المعالجة العامة للعمليات
+        # 2. المعالجة العامة للعمليات وتحديث الجداول بعزل الفرع
         if not action_results:
             ai_response = AIService.smart_process_command(
                 user_text=user_input,
@@ -301,14 +302,14 @@ if user_input:
                             
                             supabase = get_supabase_client()
                             if supabase:
-                                existing_cust = supabase.table("customers").select("id").eq("customer_name", party_name).execute()
+                                existing_cust = supabase.table("customers").select("id").eq("customer_name", party_name).eq("branch", branch_name).execute()
                                 if not existing_cust.data:
                                     supabase.table("customers").insert({
                                         "customer_name": party_name, 
                                         "branch": branch_name
                                     }).execute()
                                 
-                                existing_limit = supabase.table("customer_credit_limits").select("id").eq("customer_name", party_name).execute()
+                                existing_limit = supabase.table("customer_credit_limits").select("id").eq("customer_name", party_name).eq("branch", branch_name).execute()
                                 if not existing_limit.data:
                                     supabase.table("customer_credit_limits").insert({
                                         "customer_name": party_name,
@@ -396,7 +397,7 @@ if user_input:
                                             "description": f"مبيعات - {item_name}"
                                         }).execute()
                                     elif tx_type == "PURCHASE":
-                                        # التحقق من وجود المورد وإضافته لجدول الموردين بالطريقة السليمة
+                                        # التحقق من وجود المورد وإضافته لجدول الموردين مرتبطاً بالفرع بدقة
                                         existing_sup = supabase.table("suppliers").select("id").eq("supplier_name", supplier_name).eq("branch_id", branch_name).execute()
                                         if not existing_sup.data:
                                             supabase.table("suppliers").insert({
