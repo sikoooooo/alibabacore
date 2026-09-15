@@ -399,13 +399,13 @@ if user_input:
                                             "description": f"مبيعات - {item_name}"
                                         }).execute()
                                     elif tx_type == "PURCHASE":
-                                        # التحقق من وجود المورد وإضافته لجدول الموردين
-                                        existing_sup = supabase.table("suppliers").select("id").eq("supplier_name", supplier_name).eq("branch", branch_name).execute()
-                                        if not existing_sup.data:
-                                            supabase.table("suppliers").insert({
-                                                "supplier_name": supplier_name,
-                                                "branch": branch_name
-                                            }).execute()
+                                      # التحقق من وجود المورد وإضافته لجدول الموردين بالطريقة السليمة
+                                    existing_sup = supabase.table("suppliers").select("id").eq("supplier_name", supplier_name).eq("branch_id", branch_name).execute()
+                                     if not existing_sup.data:
+                                        supabase.table("suppliers").insert({
+                                        "supplier_name": supplier_name,
+                                         "branch_id": branch_name
+                                    }).execute()
 
                                         if not is_credit_purchase and total_invoice_price > 0:
                                             supabase.table("treasury_ledger").insert({
