@@ -23,14 +23,92 @@ def get_branch_id_safely(branch_str):
 
 st.set_page_config(page_title="التنين - المساعد المحاسبي", page_icon="🐉", layout="centered")
 
+# ==========================================
+# 🔐 إدارة مصادقة المستخدمين (Google & Facebook Login)
+# ==========================================
+if "user" not in st.session_state:
+    st.session_state.user = None
+
+supabase = get_supabase_client()
+
+# التحقق من الجلسة الحالية في Supabase (لو راجع من صفحة إعادة توجيه OAuth)
+query_params = st.query_params
+if "code" in query_params and supabase:
+    try:
+        # Supabase يتعامل تلقائياً مع الـ code أو يمكننا حفظ حالة الجلسة
+        pass
+    except Exception:
+        pass
+
+# شاشة تسجيل الدخول لو المستخدم مش مسجل
+if not st.session_state.user:
+    st.title("🐉 نظام التنين المحاسبي الصارم")
+    st.subheader("🔐 يرجى تسجيل الدخول للبدء")
+    st.write("سجل دخولك مجاناً وبأمان تام باستخدام حسابك على جوجل أو فيسبوك:")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("🔵 تسجيل الدخول بواسطة Google", use_container_width=True):
+            if supabase:
+                try:
+                    # توليد رابط تسجيل الدخول بـ Google عبر Supabase Auth
+                    res = supabase.auth.sign_in_with_oauth({
+                        "provider": "google",
+                        "options": {
+                            "redirect_to": "https://alibabacore-ogqnejif12.streamlit.app/" # استبدله برابط تطبيقك الفعلي
+                        }
+                    })
+                    if res and res.url:
+                        st.markdown(f'<meta http-equiv="refresh" content="0;url={res.url}">', unsafe_allow_html=True)
+                        st.success("جاري تحويلك لصفحة جوجل...")
+                except Exception as e:
+                    st.error(f"خطأ في الاتصال بـ Google: {e}")
+            else:
+                    st.error("تعذر الاتصال بقاعدة بيانات Supabase.")
+
+    with col2:
+        if st.button("🔵 تسجيل الدخول بواسطة Facebook", use_container_width=True):
+            if supabase:
+                try:
+                    res = supabase.auth.sign_in_with_oauth({
+                        "provider": "facebook",
+                        "options": {
+                            "redirect_to": "https://alibabacore-ogqnejif12.streamlit.app/"
+                        }
+                    })
+                    if res and res.url:
+                        st.markdown(f'<meta http-equiv="refresh" content="0;url={res.url}">', unsafe_allow_html=True)
+                        st.success("جاري تحويلك لصفحة فيسبوك...")
+                except Exception as e:
+                    st.error(f"خطأ في الاتصال بـ Facebook: {e}")
+            else:
+                st.error("تعذر الاتصال بقاعدة بيانات Supabase.")
+                
+    st.divider()
+    # زر تجاوز تجريبي مؤقت للاختبار المحلي لو حبيت
+    if st.button("🚀 دخول تجريبي سريع (للتطوير المحلي)"):
+        st.session_state.user = {"email": "test_merchant@alibaba.com", "name": "تاجر تجريبي"}
+        st.rerun()
+        
+    st.stop() # إيقاف عرض باقي التطبيق لحين تسجيل الدخول
+
+# ==========================================
+# التطبيق الرئيسي (يعمل فقط بعد تسجيل الدخول)
+# ==========================================
 st.title("🐉 نظام التنين المحاسبي الصارم")
-st.write("النظام المحاسبي المباشر لإدارة المعاملات، المخزن، والموردين بسرعة فائقة.")
+st.write(f"مرحباً بك، أهلاً بك في نظامك المحاسبي المباشر. (المستخدم: {st.session_state.user.get('email', 'مدير النظام')})")
+
+if st.sidebar.button("🚪 تسجيل الخروج"):
+    st.session_state.user = None
+    if supabase:
+        supabase.auth.sign_out()
+    st.rerun()
 
 # ⚙️ إعدادات النظام وتعدد الفروع للمستخدم التجاري
 with st.sidebar:
     st.header("⚙️ إعدادات النظام والشركة")
     
-    # محاكاة تسجيل الدخول أو اختيار الشركة/المستخدم التجاري
     company_code = st.text_input("كود الشركة / المعرف التجاري:", value="company_main_01")
     branch_name = st.text_input("اسم الفرع الحالي:", value="الفرع الرئيسي")
     
@@ -72,10 +150,9 @@ with st.sidebar:
 
     if st.button("💰 حركة الخزينة وصافي الكاش"):
         with st.spinner("جاري حساب رصيد الخزينة..."):
-            supabase = get_supabase_client()
-            if supabase:
-                # فلترة دقيقة بالفرع والشركات لتفادي التداخل بين العملاء التجاريين
-                res = supabase.table("treasury_ledger").select("type, amount").eq("branch", branch_name).execute()
+            supabase_client = get_supabase_client()
+            if supabase_client:
+                res = supabase_client.table("treasury_ledger").select("type, amount").eq("branch", branch_name).execute()
                 records = res.data if res.data else []
                 total_in = sum(float(r.get("amount", 0)) for r in records if r.get("type") == "INFLOW")
                 total_out = sum(float(r.get("amount", 0)) for r in records if r.get("type") == "OUTFLOW")
@@ -125,9 +202,9 @@ if user_input:
         is_installment_query = any(k in user_input_clean for k in ["قسط", "أقساط", "ديون", "بيان", "مستحق", "هات"])
         
         if is_installment_query:
-            supabase = get_supabase_client()
-            if supabase:
-                inst_query = supabase.table("installments").select("*").eq("branch", branch_name).execute()
+            supabase_client = get_supabase_client()
+            if supabase_client:
+                inst_query = supabase_client.table("installments").select("*").eq("branch", branch_name).execute()
                 rows = inst_query.data if inst_query.data else []
                 
                 filtered_rows = []
@@ -249,13 +326,13 @@ if user_input:
                                 conversion_factor=conv_factor
                             )
                             if inv_res.get("status") == "SUCCESS":
-                                supabase = get_supabase_client()
+                                supabase_client = get_supabase_client()
                                 total_refund = (price * qty) if price > 0 else 0.0
                                 if discount_amount > 0:
                                     total_refund = max(0.0, total_refund - discount_amount)
                                     
-                                if supabase and total_refund > 0:
-                                    supabase.table("treasury_ledger").insert({
+                                if supabase_client and total_refund > 0:
+                                    supabase_client.table("treasury_ledger").insert({
                                         "branch": branch_name,
                                         "type": "OUTFLOW",
                                         "amount": total_refund,
@@ -313,18 +390,18 @@ if user_input:
                             installment_value = remaining_amount / months_count if months_count > 0 else remaining_amount
                             initial_limit = max(10000.0, total_amount)
                             
-                            supabase = get_supabase_client()
-                            if supabase:
-                                existing_cust = supabase.table("customers").select("id").eq("customer_name", party_name).eq("branch", branch_name).execute()
+                            supabase_client = get_supabase_client()
+                            if supabase_client:
+                                existing_cust = supabase_client.table("customers").select("id").eq("customer_name", party_name).eq("branch", branch_name).execute()
                                 if not existing_cust.data:
-                                    supabase.table("customers").insert({
+                                    supabase_client.table("customers").insert({
                                         "customer_name": party_name, 
                                         "branch": branch_name
                                     }).execute()
                                 
-                                existing_limit = supabase.table("customer_credit_limits").select("id").eq("customer_name", party_name).eq("branch", branch_name).execute()
+                                existing_limit = supabase_client.table("customer_credit_limits").select("id").eq("customer_name", party_name).eq("branch", branch_name).execute()
                                 if not existing_limit.data:
-                                    supabase.table("customer_credit_limits").insert({
+                                    supabase_client.table("customer_credit_limits").insert({
                                         "customer_name": party_name,
                                         "credit_limit": initial_limit,
                                         "branch": branch_name
@@ -346,8 +423,8 @@ if user_input:
                                 action_results.append(f"⚠️ تنبيه مخزني: {inv_res.get('message', 'خطأ في خصم المخزن')}")
                                 continue
 
-                            if supabase and down_payment > 0:
-                                supabase.table("treasury_ledger").insert({
+                            if supabase_client and down_payment > 0:
+                                supabase_client.table("treasury_ledger").insert({
                                     "branch": branch_name,
                                     "type": "INFLOW",
                                     "amount": down_payment,
@@ -400,27 +477,26 @@ if user_input:
                             )
                             
                             if res.get("status") == "SUCCESS":
-                                supabase = get_supabase_client()
-                                if supabase:
+                                supabase_client = get_supabase_client()
+                                if supabase_client:
                                     if tx_type == "SALE" and total_invoice_price > 0:
-                                        supabase.table("treasury_ledger").insert({
+                                        supabase_client.table("treasury_ledger").insert({
                                             "branch": branch_name,
                                             "type": "INFLOW",
                                             "amount": total_invoice_price,
                                             "description": f"مبيعات - {item_name}"
                                         }).execute()
                                     elif tx_type == "PURCHASE":
-                                        # التحقق الآمن من المورد وإضافته مع جلب المعرف المناسب للفرع بدقة
                                         safe_branch_id = get_branch_id_safely(branch_name)
-                                        existing_sup = supabase.table("suppliers").select("id").eq("supplier_name", supplier_name).eq("branch_id", safe_branch_id).execute()
+                                        existing_sup = supabase_client.table("suppliers").select("id").eq("supplier_name", supplier_name).eq("branch_id", safe_branch_id).execute()
                                         if not existing_sup.data:
-                                            supabase.table("suppliers").insert({
+                                            supabase_client.table("suppliers").insert({
                                                 "supplier_name": supplier_name,
                                                 "branch_id": safe_branch_id
                                             }).execute()
 
                                         if not is_credit_purchase and total_invoice_price > 0:
-                                            supabase.table("treasury_ledger").insert({
+                                            supabase_client.table("treasury_ledger").insert({
                                                 "branch": branch_name,
                                                 "type": "OUTFLOW",
                                                 "amount": total_invoice_price,
