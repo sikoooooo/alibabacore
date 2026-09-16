@@ -56,7 +56,7 @@ if not st.session_state.user:
                     res = supabase.auth.sign_in_with_oauth({
                         "provider": "google",
                         "options": {
-                            "redirect_to": "https://alibabacore-ogqnejif12.streamlit.app/" # استبدله برابط تطبيقك الفعلي
+                            "redirect_to": "https://alibabacore-ogqnejif12.streamlit.app"
                         }
                     })
                     if res and res.url:
@@ -74,7 +74,7 @@ if not st.session_state.user:
                     res = supabase.auth.sign_in_with_oauth({
                         "provider": "facebook",
                         "options": {
-                            "redirect_to": "https://alibabacore-ogqnejif12.streamlit.app/"
+                            "redirect_to": "https://alibabacore-ogqnejif12.streamlit.app"
                         }
                     })
                     if res and res.url:
