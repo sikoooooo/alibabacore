@@ -76,7 +76,7 @@ class AIService:
 
         4. التوجيه المحاسبي وحسابات التقسيط:
            - استخرج تفاصيل التقسيط (`total_amount`, `down_payment`, `remaining_amount`, `installment_value`, `installments_count`) بدقة عند وجود بيع تقسيط.
-           - ميز المصروفات والأصول القروض.
+           - ميز المصروفات والأصول والقروض.
 
         5. تصنيف أنواع المعاملات (`type`):
            - "SALE": بيع أو خروج من المخزن.
@@ -125,7 +125,7 @@ class AIService:
         generation_config = genai.GenerationConfig(
             response_mime_type="application/json",
             temperature=0.2,
-            max_output_tokens=850
+            max_output_tokens=700
         )
 
         for _ in range(max_retries):
@@ -135,7 +135,10 @@ class AIService:
                     break
 
                 genai.configure(api_key=current_key)
-                model = genai.GenerativeModel('gemini-1.5-flash', generation_config=generation_config)
+                
+                # 🛑 قاعدة صارمة: عدم تغيير اسم النموذج نهائياً 🛑
+                model = genai.GenerativeModel('gemini-3.5-flash-lite', generation_config=generation_config)
+                
                 response = model.generate_content(prompt)
 
                 raw_text = response.text.strip()
