@@ -23,8 +23,8 @@ if not api_keys:
 
 
 PERSONA_PROMPTS = {
-    "hantouf": "أسلوبك: 'حنتوف' المحاسب الصارم، دقيق جداً وتهتم بأصغر الملاليم وتصيغ الرد بجدية وإنذارات دقيقة.",
-    "barkawi": "أسلوبك: 'بركاوي' المتفائل، تبدأ بذكر الله والبركة وتشجع التاجر بالرزق وتيسير الأمور.",
+    "hantouf": "أسلوبك: 'حنتوف' المحاسب الصارم لبرنامج نافع، دقيق جداً وتهتم بأصغر الملاليم وتصيغ الرد بجدية وإنذارات دقيقة.",
+    "barkawi": "أسلوبك: 'بركاوي' المتفائل في برنامج نافع، تبدأ بذكر الله والبركة وتشجع التاجر بالرزق وتيسير الأمور.",
     "kaeeb": "أسلوبك: 'كئيب' صاحب الكوميديا السوداء، تذكر التاجر بالديون والالتزامات والمصاعب بأسلوب درامي ساخر.",
     "funny": "أسلوبك: 'الفرفوش المضحك'، تستخدم الإفيهات والفكاهة المصرية الخفيفة والمزاح أثناء توضيح المعاملة."
 }
@@ -34,7 +34,7 @@ class AIService:
     current_key_index = 0
 
     @classmethod
-    def smart_process_command(cls, user_text: str, branch: str, persona: str = "hantouf", 
+    def smart_process_command(cls, user_text: str, branch: str = "الفرع الرئيسي", persona: str = "hantouf", 
                               branch_rules: list = None, chat_history: list = None):
         if chat_history is None:
             chat_history = []
@@ -45,65 +45,67 @@ class AIService:
         history_context = "\n".join([f"- {m['role']}: {m['content']}" for m in chat_history[-4:]]) if chat_history else "لا يوجد سياق سابق."
 
         prompt = f"""
-        أنت المحاسب الذكي ومدير المخزون لنظام ERP الشبكي الذكي.
+        أنت المحاسب الذكي والمساعد التنفيذي لـ "برنامج نافع" لإدارة المتاجر والمبيعات والمخزون.
         توجيه أسلوب الرد: {persona_instruction}
         قواعد الفرع: {branch_rules}
 
         سياق المحادثة السابقة:
         {history_context}
 
-        رسالة التاجر الحالية: "{user_text}"
+        رسالة/أمر التاجر الحالي: "{user_text}"
 
         🧠 قواعد التصنيف والتحليل الصارمة (إجباري):
 
-        1. استخراج الوحدات والعبوات المركبة بدقة تامة:
+        1. تحديد الأوامر والكلمات المفتاحية التشغيلية (`action`):
+           - قم بتحديد نوع الإجراء المطلوب بناءً على كلام التاجر:
+             - "EXECUTE": إذا قال التاجر كلمات مثل ("نفذ", "اطبع الفاتورة", "حاسب", "تم البيع", "حفظ").
+             - "NEW_INVOICE": إذا قال التاجر كلمات مثل ("فاتورة تانية", "فاتورة جديدة", "انقل على الفاتورة اللي بعدها").
+             - "SAVE_DRAFT": إذا كان التاجر يملي أصنافاً فقط بدون أمر إنهاء أو طباعة صريح.
+
+        2. كشف السعر المخصص (`is_custom_price`):
+           - إذا حدد التاجر سعراً مخصصاً للصنف في كلامه (مثال: "زبالة فلورا بـ 150" أو "اعملها بـ 120 عشان ده زبون قديم"):
+             - ضع السعر المذكور في `unit_price`.
+             - اجعل `is_custom_price` تساوي `true`.
+           - إذا ذكر الصنف والكمية فقط بدون تحديد سعر خاص، اجعل `is_custom_price` تساوي `false` وضع `unit_price` بـ 0.0 ليعتمد السيستم سعر المخزن الافتراضي.
+
+        3. استخراج الوحدات والعبوات المركبة بدقة تامة:
            - إذا ذكر التاجر وحدة كبرى تحتوي على وحدات صغرى (مثل: "لفة أطباق فيها 100 طبق" أو "كرتونة فيها 12 زجاجة"):
              - اجعل `unit` أو `major_unit` هي الوحدة الكبرى (مثل: "لفة" أو "كرتونة").
              - اجعل `minor_unit` هي الوحدة الصغرى (مثل: "طبق" أو "زجاجة").
-             - اجعل `conversion_factor` هو عدد الوحدات الصغرى داخل الوحدة الكبرى (مثل: 100.0 أو 12.0). وإذا لم تذكر، ضعها 1.0.
+             - اجعل `conversion_factor` هو عدد الوحدات الصغرى داخل الوحدة الكبرى (مثل: 100.0 أو 12.0).
 
-        2. التوجيه المحاسبي الدقيق (المصروفات، الأصول، والقروض):
-           - إذا كانت العملية تخص مصروفات (مثل رواتب، صيانة)، أو أصول ثابتة (مثل جهاز حاسب آلي)، أو قروض (مثل قرض بنكي)، قم بتمييز طبيعتها في اسم الصنف أو المعاملة ولا تعاملها كبضاعة مخزنية تقليدية.
-
-        3. دعم المعاملات المركبة واستعلامات الحد الائتماني:
-           - إذا طلب التاجر تعيين أو تعديل حد ائتماني لعميل، اجعل نوع المعاملة "UPDATE_CREDIT_LIMIT".
-
-        4. حسابات التقسيط بدقة رياضية صارمة:
-           - إذا كانت المعاملة تقسيط، قم باستخراج أو حساب:
-             - `total_amount`: إجمالي قيمة الفاتورة أو البضاعة بدقة.
-             - `down_payment`: المبلغ المدفوع مقدماً (إن وُجد).
-             - `remaining_amount`: المبلغ المتبقي بدقة (يجب ألا يتجاوز إجمالي المبلغ أبداً).
-             - `installment_value`: قيمة القسط الواحد بدقة.
-             - `installments_count`: عدد الأقساط.
-             - `interval_days`: الفاصل الزمني للأقساط بالأيام (افتراضياً 30 للشهر).
-           - ممنوع نهائياً وضع قيم عشوائية أو وهمية (مثل 2 جنيه) ويجب أن تطابق الأرقام منطق كلام التاجر تماماً.
+        4. التوجيه المحاسبي وحسابات التقسيط:
+           - استخرج تفاصيل التقسيط (`total_amount`, `down_payment`, `remaining_amount`, `installment_value`, `installments_count`) بدقة عند وجود بيع تقسيط.
+           - ميز المصروفات والأصول القروض.
 
         5. تصنيف أنواع المعاملات (`type`):
-           - "PURCHASE": شراء أو توريد للمخزن أو مصروفات/أصول.
            - "SALE": بيع أو خروج من المخزن.
+           - "PURCHASE": شراء أو توريد للمخزن.
            - "RETURN": مرتجع مشتريات أو مبيعات.
            - "QUERY": استعلام عن رصيد أو ديون أو تقارير.
-           - "UPDATE_PRICE": تحديد سعر معاملة معلقة سابقة.
-           - "UPDATE_CREDIT_LIMIT": تعديل أو تعيين الحد الائتماني للعميل.
-           - "INCOMPLETE": كلام غامض أو غير مكتمل محاسبياً.
+           - "UPDATE_PRICE": تعديل أو تحديد سعر معاملة.
+           - "UPDATE_CREDIT_LIMIT": تعديل الحد الائتماني.
+           - "INCOMPLETE": كلام غامض غير مكتمل.
 
         نسق المخرجات داخل هيكل JSON التالي حصرياً وبدون أي أوسمة markdown أو نصوص خارجية:
         {{
             "confidence_score": 0.95,
             "persona_used": "{persona}",
-            "message_to_user": "الرد بأسلوب الشخصية المختارة يوضح ما تم بدقة مع ذكر تفاصيل الكمية والعبوة والتقسيط والتوجيه المحاسبي",
+            "action": "EXECUTE" | "NEW_INVOICE" | "SAVE_DRAFT",
+            "message_to_user": "رد بأسلوب الشخصية المختارة يوضح ما تم فهمه وتأكيده للتاجر",
             "transactions": [
                 {{
                     "type": "PURCHASE" | "SALE" | "RETURN" | "QUERY" | "UPDATE_PRICE" | "UPDATE_CREDIT_LIMIT" | "INCOMPLETE",
-                    "item_name": "اسم الصنف أو اسم العميل أو بند المصروف/الأصل",
+                    "item_name": "اسم الصنف أو العميل أو المصروف",
                     "brand": "اسم الماركة أو غير محدد",
                     "supplier": "اسم المورد أو العميل",
                     "quantity": 1.0,
-                    "unit": "الوحدة الكبرى المستخدمة في الكلام (مثل لفة)",
-                    "major_unit": "الوحدة الكبرى (مثل لفة)",
-                    "minor_unit": "الوحدة الصغرى الداخلية (مثل طبق)",
+                    "unit": "الوحدة الكبرى (مثل قطعة أو كرتونة)",
+                    "major_unit": "الوحدة الكبرى",
+                    "minor_unit": "الوحدة الصغرى",
                     "conversion_factor": 1.0,
                     "unit_price": 0.0,
+                    "is_custom_price": false,
                     "is_installment": false,
                     "total_amount": 0.0,
                     "down_payment": 0.0,
@@ -123,7 +125,7 @@ class AIService:
         generation_config = genai.GenerationConfig(
             response_mime_type="application/json",
             temperature=0.2,
-            max_output_tokens=700
+            max_output_tokens=850
         )
 
         for _ in range(max_retries):
@@ -133,7 +135,7 @@ class AIService:
                     break
 
                 genai.configure(api_key=current_key)
-                model = genai.GenerativeModel('gemini-3.5-flash-lite', generation_config=generation_config)
+                model = genai.GenerativeModel('gemini-1.5-flash', generation_config=generation_config)
                 response = model.generate_content(prompt)
 
                 raw_text = response.text.strip()
@@ -154,7 +156,8 @@ class AIService:
         return {
             "confidence_score": 0.0,
             "persona_used": persona,
-            "message_to_user": f"⚠️ خطأ في معالجة الطلب: {last_error_msg}",
+            "action": "SAVE_DRAFT",
+            "message_to_user": f"⚠️ خطأ في معالجة الطلب عبر نافع: {last_error_msg}",
             "transactions": [
                 {
                     "type": "INCOMPLETE",
@@ -167,6 +170,7 @@ class AIService:
                     "minor_unit": "غير محدد",
                     "conversion_factor": 1.0,
                     "unit_price": 0.0,
+                    "is_custom_price": False,
                     "is_installment": False,
                     "total_amount": 0.0,
                     "down_payment": 0.0,
