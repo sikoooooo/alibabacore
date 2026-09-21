@@ -3,7 +3,19 @@ from core.database import get_supabase_client
 
 class InventoryService:
     @classmethod
-    def process_transaction(cls, branch: str, item_name: str, quantity: float, price: float, supplier: str, transaction_type: str, unit: str = "وحدة", minor_unit: str = None, conversion_factor: float = 1.0) -> dict:
+    def process_transaction(
+        cls, 
+        branch: str, 
+        item_name: str, 
+        quantity: float, 
+        price: float, 
+        supplier: str, 
+        transaction_type: str, 
+        unit: str = "وحدة", 
+        minor_unit: str = None, 
+        conversion_factor: float = 1.0,
+        is_custom_price: bool = False
+    ) -> dict:
         supabase = get_supabase_client()
         if not supabase:
             return {"status": "ERROR", "message": "قاعدة البيانات غير متوفرة."}
@@ -13,8 +25,21 @@ class InventoryService:
             
             effective_qty = quantity * conv
             recorded_unit = minor_unit if minor_unit and minor_unit != "غير محدد" else actual_unit
-            unit_price_calculated = price / conv if conv > 1 else price
-            total_val = quantity * price
+            
+            # 1. معالجة السعر المخصص والسعر الافتراضي من المخزن
+            effective_price = price
+            # إذا لم يذكر التاجر سعراً مخصصاً في حالة البيع، نجلب السعر الافتراضي المسجل في المخزن
+            if transaction_type == "SALE" and not is_custom_price and (price == 0 or price is None):
+                try:
+                    inv_item = supabase.table("inventory").select("selling_price, avg_cost_per_base").eq("branch", branch).ilike("item_name", f"%{item_name}%").limit(1).execute()
+                    if inv_item.data:
+                        recorded_price = inv_item.data[0].get("selling_price") or inv_item.data[0].get("avg_cost_per_base") or 0.0
+                        effective_price = float(recorded_price)
+                except Exception as pe:
+                    print(f"Fetch default selling_price error: {pe}")
+
+            unit_price_calculated = effective_price / conv if conv > 1 else effective_price
+            total_val = quantity * effective_price
 
             price_alert_msg = ""
             if transaction_type == "PURCHASE":
@@ -27,12 +52,13 @@ class InventoryService:
                 except Exception as alert_err:
                     print(f"Price alert check error: {alert_err}")
 
-            # 1. تسجيل الحركة في جدول transactions
+            # 2. تسجيل الحركة في جدول transactions شاملاً حالة السعر المخصص
             tx_data = {
                 "branch": branch,
                 "item_name": item_name,
                 "quantity": quantity,
                 "unit_price": unit_price_calculated,
+                "is_custom_price": is_custom_price,
                 "supplier": supplier,
                 "type": transaction_type,
                 "unit": recorded_unit
@@ -41,10 +67,9 @@ class InventoryService:
 
             # تحديد المصروفات التشغيلية والأصول الثابتة الإدارية بدقة تامة لتفادي تداخل بضاعة النشاط التجاري
             is_expense = any(keyword in item_name.lower() for keyword in ["رواتب", "صيانة", "مرتبات", "إيجار", "كهرباء", "مياه"])
-            # الأصول الثابتة تشمل حصراً المقتنيات الإدارية التشغيلية (وليس بضاعة النشاط للبيع)
             is_asset = any(keyword in item_name.lower() for keyword in ["أصل ثابت", "أثاث مكتبي", "معدات إدارية", "سيارة توصيل إدارة"])
 
-            # 2. إنشاء قيد يومي مزدوج دقيق في journal_entries
+            # 3. إنشاء قيد يومي مزدوج دقيق في journal_entries
             if transaction_type == "PURCHASE" and is_expense:
                 desc_text = f"مصروف تشغيلي: {item_name} ({quantity} {actual_unit})"
                 debit_acc = f"حساب المصروفات ({item_name})"
@@ -54,12 +79,11 @@ class InventoryService:
                 debit_acc = f"حساب الأصول الثابتة ({item_name})"
                 credit_acc = "الخزينة/البنك"
             elif transaction_type == "PURCHASE":
-                # أي مشتريات أخرى (حتى لو أجهزة أو سيارات لمعرض تجاري) تعتبر بضاعة مخزنية للبيع
                 desc_text = f"مشتريات بضاعة للبيع: {item_name} ({quantity} {actual_unit})"
                 debit_acc = "المخزون"
                 credit_acc = supplier if supplier else "الموردين"
             else:
-                desc_text = f"مبيعات {item_name} ({quantity} {actual_unit})"
+                desc_text = f"مبيعات {item_name} ({quantity} {actual_unit})" + (" (سعر مخصص)" if is_custom_price else "")
                 debit_acc = "العملاء/الخزينة"
                 credit_acc = "المبيعات"
 
@@ -75,7 +99,7 @@ class InventoryService:
             except Exception as je:
                 print(f"Journal entry log error: {je}")
 
-            # 2.5 تسجيل الحركة النقدية في treasury_ledger للخروج أو الدخول بدقة
+            # 4. تسجيل الحركة النقدية في treasury_ledger
             if total_val > 0:
                 treasury_type = "OUTFLOW" if transaction_type == "PURCHASE" else "INFLOW"
                 
@@ -97,7 +121,7 @@ class InventoryService:
                 except Exception as te:
                     print(f"Treasury ledger log error: {te}")
 
-            # 3. تحديث أو إدراج المخزن (البضائع ومبيعات ومشتريات المعرض تدخل المخزن طبيعياً)
+            # 5. تحديث أو إدراج المخزن
             if not (is_expense or is_asset):
                 multiplier = 1 if transaction_type == "PURCHASE" else -1
                 net_change = effective_qty * multiplier
@@ -153,7 +177,8 @@ class InventoryService:
             "brand": "البراند/الماركة",
             "supplier_customer": "المورد",
             "major_unit": "الوحدة الكبرى",
-            "minor_unit": "الوحدة الصغرى"
+            "minor_unit": "الوحدة الصغرى",
+            "selling_price": "سعر البيع الافتراضي"
         }
         
         if field_name not in allowed_fields:
