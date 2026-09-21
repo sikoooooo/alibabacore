@@ -5,7 +5,7 @@ class QueryService:
     @classmethod
     def get_comprehensive_report(cls, branch: str, report_type: str) -> Dict[str, Any]:
         """
-        استعلامات شاملة ومخصصة ومفصولة هندسياً حسب رغبة التاجر:
+        استعلامات شاملة ومخصصة ومفصولة هندسياً لبرنامج نافع:
         report_type: (inventory, installments, suppliers, sales_reps, expenses, assets)
         """
         supabase = get_supabase_client()
@@ -14,11 +14,11 @@ class QueryService:
         try:
             if report_type == "inventory":
                 # استرجاع البضائع المخزنية الحقيقية فقط (باستبعاد المصروفات والأصول والقروض)
-                res = supabase.table("inventory").select("item_name, total_base_quantity, avg_cost_per_base, major_unit").eq("branch", branch).execute()
+                res = supabase.table("inventory").select("item_name, total_base_quantity, avg_cost_per_base, major_unit, selling_price").eq("branch", branch).execute()
                 if not res.data:
                     return {"status": "SUCCESS", "message": "المخزن فارغ حالياً."}
                 
-                # تصفية البضائع التي تسجلت خطأ كمصروفات أو أصول بالخطأ سابقاً
+                # تصفية البضائع التي تسجلت كمصروفات أو أصول بالخطأ سابقاً
                 filtered_items = [
                     i for i in res.data 
                     if not any(kw in i['item_name'].lower() for kw in ["رواتب", "صيانة", "قرض", "أصل", "جهاز"])
@@ -27,24 +27,27 @@ class QueryService:
                 if not filtered_items:
                     return {"status": "SUCCESS", "message": "لا توجد أصناف مخزنية حقيقية حالياً (المخزن الصافي نظيف)."}
 
-                items = [f"- {i['item_name']} (الرصيد: {i['total_base_quantity']} {i.get('major_unit', 'وحدة')}, التكلفة: {i['avg_cost_per_base']}ج)" for i in filtered_items]
+                items = [
+                    f"- {i['item_name']} (الرصيد: {i['total_base_quantity']} {i.get('major_unit', 'وحدة')}, التكلفة: {i['avg_cost_per_base']}ج, سعر البيع: {i.get('selling_price', 0)}ج)"
+                    for i in filtered_items
+                ]
                 return {
                     "status": "SUCCESS", 
                     "type": "inventory", 
                     "data": filtered_items, 
-                    "message": f"📦 **تقرير المخزن الصافي للفرع ({branch}):**\n" + "\n".join(items)
+                    "message": f"📦 **تقرير المخزن الصافي لبرنامج نافع - فرع ({branch}):**\n" + "\n".join(items)
                 } 
 
             elif report_type == "installments":
-                res = supabase.table("installments").select("customer_name, remaining_amount, due_date").eq("branch", branch).execute()
+                res = supabase.table("installments").select("customer_name, item_name, remaining_amount, due_date, status").eq("branch", branch).execute()
                 if not res.data:
                     return {"status": "SUCCESS", "message": "لا توجد أقساط مسجلة حالياً."}
-                insts = [f"- العميل: {i['customer_name']} | المتبقي: {i['remaining_amount']}ج | الاستحقاق: {i.get('due_date', 'غير محدد')}" for i in res.data]
+                insts = [f"- العميل: {i['customer_name']} | الصنف: {i.get('item_name', 'غير محدد')} | المتبقي: {i['remaining_amount']}ج | الاستحقاق: {i.get('due_date', 'غير محدد')}" for i in res.data]
                 return {
                     "status": "SUCCESS", 
                     "type": "installments", 
                     "data": res.data, 
-                    "message": f"💳 **متابعة أقساط العملاء والذمم:**\n" + "\n".join(insts)
+                    "message": f"💳 **متابعة أقساط العملاء والذمم (فرع {branch}):**\n" + "\n".join(insts)
                 } 
 
             elif report_type == "suppliers":
@@ -56,7 +59,7 @@ class QueryService:
                     "status": "SUCCESS", 
                     "type": "suppliers", 
                     "data": res.data, 
-                    "message": f"🏭 **مستحقات الموردين المستقلة:**\n" + "\n".join(sups)
+                    "message": f"🏭 **مستحقات الموردين المستقلة (فرع {branch}):**\n" + "\n".join(sups)
                 } 
 
             elif report_type == "sales_reps":
@@ -68,8 +71,35 @@ class QueryService:
                     "status": "SUCCESS", 
                     "type": "sales_reps", 
                     "data": res.data, 
-                    "message": f"📊 **إجمالي مبيعات وأرباح الفرع:** {total_sales} جنيه عبر ({len(res.data)}) حركة بيع."
+                    "message": f"📊 **إجمالي مبيعات فرع ({branch}):** {total_sales:,.2f} جنيه عبر ({len(res.data)}) حركة بيع."
                 } 
+
+            elif report_type == "expenses":
+                res = supabase.table("treasury_ledger").select("*").eq("branch", branch).ilike("description", "%مصروف%").execute()
+                if not res.data:
+                    return {"status": "SUCCESS", "message": "لا توجد مصروفات مسجلة حالياً."}
+                total_exp = sum(float(i.get("amount", 0)) for i in res.data)
+                items = [f"- {i.get('description')}: {float(i.get('amount', 0)):,.2f}ج" for i in res.data]
+                return {
+                    "status": "SUCCESS",
+                    "type": "expenses",
+                    "data": res.data,
+                    "message": f"💸 **تقرير المصروفات التشغيلية لفرع ({branch}):**\nإجمالي المصروفات: {total_exp:,.2f} جنيه\n" + "\n".join(items)
+                }
+
+            elif report_type == "assets":
+                res = supabase.table("treasury_ledger").select("*").eq("branch", branch).ilike("description", "%أصل ثابت%").execute()
+                if not res.data:
+                    return {"status": "SUCCESS", "message": "لا توجد أصول ثابتة مسجلة حالياً."}
+                total_assets = sum(float(i.get("amount", 0)) for i in res.data)
+                items = [f"- {i.get('description')}: {float(i.get('amount', 0)):,.2f}ج" for i in res.data]
+                return {
+                    "status": "SUCCESS",
+                    "type": "assets",
+                    "data": res.data,
+                    "message": f"🏛️ **تقرير الأصول الثابتة لفرع ({branch}):**\nإجمالي قيمة الأصول: {total_assets:,.2f} جنيه\n" + "\n".join(items)
+                }
+
             else:
                 return {"status": "ERROR", "message": "⚠️ نوع التقرير المطلوب غير معروف."}
 
