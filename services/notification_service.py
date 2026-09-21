@@ -27,6 +27,7 @@ def get_supabase_client() -> Optional[Client]:
         print(f"Error initializing Supabase client: {e}")
         return None
 
+
 class NotificationService:
     
     @classmethod
@@ -39,7 +40,7 @@ class NotificationService:
         branch_id: Optional[str] = None,
         branch: Optional[str] = None
     ) -> Dict[str, Any]:
-        """إنشاء إشعار جديد في قاعدة البيانات وترحيله للـ Realtime."""
+        """إنشاء إشعار جديد في برنامج نافع وترحيله للـ Realtime."""
         target_branch = branch_id or branch
         client = get_supabase_client()
         if not client:
@@ -70,13 +71,14 @@ class NotificationService:
         branch_id: Optional[str] = None,
         branch: Optional[str] = None
     ) -> Dict[str, Any]:
-        """تنبيه بالبضائع الراكدة مصحوباً باقتراح تسويقي من الـ AI."""
+        """تنبيه بالبضائع الراكدة مصحوباً باقتراح تسويقي ذكي."""
         target_branch = branch_id or branch
         return cls.create_notification(
             title="💡 تنبيه صنف راكد + اقتراح تسويقي",
-            message=f"الصنف '{item_name}' لم يتحرك منذ {days_inactive} يوماً (الرصيد: {current_qty}).\n💡 اقتراح النظام: {marketing_suggestion}",
+            message=f"الصنف '{item_name}' لم يتحرك منذ {days_inactive} يوماً (الرصيد: {current_qty}).\n💡 اقتراح نافع: {marketing_suggestion}",
             alert_type="SLOW_MOVING",
-            branch_id=target_branch
+            branch_id=target_branch,
+            branch=target_branch
         )
 
     @classmethod
@@ -94,7 +96,8 @@ class NotificationService:
             title="⚠️ صنف معلق بدون سعر",
             message=f"تم تسجيل المعاملة{tx_ref} للصنف '{item_name}' بدون سعر. يرجى إدخال السعر لتفعيل القيود المالية ومتوسط التكلفة.",
             alert_type="PENDING_PRICE",
-            branch_id=target_branch
+            branch_id=target_branch,
+            branch=target_branch
         )
 
     @classmethod
@@ -110,9 +113,10 @@ class NotificationService:
         target_branch = branch_id or branch
         return cls.create_notification(
             title="🔴 تجاوز الحد الائتماني",
-            message=f"العميل {customer_name} تجاوز الحد الائتماني المسموح ({limit:,.2f} ج.م). إجمالي الديون الحالية: {current_debt:,.2f} ج.م.",
+            message=f"العميل '{customer_name}' تجاوز الحد الائتماني المسموح ({limit:,.2f} ج.م). إجمالي الديون الحالية: {current_debt:,.2f} ج.م.",
             alert_type="CREDIT",
-            branch_id=target_branch
+            branch_id=target_branch,
+            branch=target_branch
         )
 
     @classmethod
@@ -129,7 +133,8 @@ class NotificationService:
             title="📦 تنبيه نواقص المخزون",
             message=f"رصيد الصنف '{item_name}' أوشك على النفاد. المتبقي حالياً: {remaining_qty}.",
             alert_type="INVENTORY",
-            branch_id=target_branch
+            branch_id=target_branch,
+            branch=target_branch
         )
 
     @classmethod
@@ -137,13 +142,13 @@ class NotificationService:
         """جلب الإشعارات الذكية غير المقروءة والمنسقة للفرع."""
         unread = cls.get_unread_notifications(branch=branch)
         if not unread:
-            return {"status": "SUCCESS", "message": "✅ لا توجد تنبيهات جديدة حالياً."}
+            return {"status": "SUCCESS", "message": "✅ لا توجد تنبيهات جديدة حالياً في برنامج نافع."}
         
         formatted_msgs = [f"- [{item['title']}] {item['message']}" for item in unread]
         return {
             "status": "SUCCESS",
             "count": len(unread),
-            "message": "🔔 **التنبيهات المعلقة:**\n\n" + "\n".join(formatted_msgs)
+            "message": f"🔔 **تنبيهات برنامج نافع المعلقة (فرع {branch}):**\n\n" + "\n".join(formatted_msgs)
         }
 
     @classmethod
@@ -152,7 +157,7 @@ class NotificationService:
         branch_id: Optional[str] = None,
         branch: Optional[str] = None
     ) -> List[Dict[str, Any]]:
-        """جلب جميع التنبيهات غير المقروءة للواجهة."""
+        """جلب جميع التنبيهات غير المقروءة للفرع مع المرونة في المطابقة."""
         target_branch = branch_id or branch
         client = get_supabase_client()
         if not client:
@@ -160,7 +165,8 @@ class NotificationService:
         try:
             query = client.table("notifications").select("*").eq("is_read", False)
             if target_branch:
-                query = query.eq("branch_id", target_branch)
+                # البحث بـ branch_id أو branch للحصول على كل التنبيهات بغض النظر عن طريقة التسجيل
+                query = query.or_(f"branch_id.eq.{target_branch},branch.eq.{target_branch}")
             res = query.order("created_at", desc=True).execute()
             return res.data or []
         except Exception as e:
@@ -178,4 +184,17 @@ class NotificationService:
             return bool(res.data)
         except Exception as e:
             print(f"Error marking notification as read: {e}")
+            return False
+
+    @classmethod
+    def mark_all_as_read(cls, branch: str) -> bool:
+        """تحديث جميع إشعارات الفرع إلى مقروءة."""
+        client = get_supabase_client()
+        if not client:
+            return False
+        try:
+            client.table("notifications").update({"is_read": True}).or_(f"branch_id.eq.{branch},branch.eq.{branch}").execute()
+            return True
+        except Exception as e:
+            print(f"Error marking all notifications as read: {e}")
             return False
